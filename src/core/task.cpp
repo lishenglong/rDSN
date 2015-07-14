@@ -35,53 +35,27 @@
 # include "rpc_engine.h"
 # include <dsn/internal/synchronize.h>
 
-#define __TITLE__ "task"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "task"
 
 namespace dsn {
 
-static __thread
-struct 
-{ 
-    uint32_t     magic; 
-    task         *current_task;
-    task_worker  *worker;
-} tls_task_info;  
-
-/*static*/ task* task::get_current_task()
-{
-    if (tls_task_info.magic == 0xdeadbeef)
-        return tls_task_info.current_task;
-    else
-        return nullptr;
-}
-
-/*static*/ uint64_t task::get_current_task_id()
-{
-    if (tls_task_info.magic == 0xdeadbeef)
-        return tls_task_info.current_task ? tls_task_info.current_task->id() : 0;
-    else
-        return 0;
-}
-
-
-/*static*/ task_worker* task::get_current_worker()
-{
-    if (tls_task_info.magic == 0xdeadbeef)
-        return tls_task_info.worker;
-    else
-        return nullptr;
-}
+__thread struct __tls_task_info__ tls_task_info;
 
 /*static*/ void task::set_current_worker(task_worker* worker)
 {
     if (tls_task_info.magic == 0xdeadbeef)
     {
         tls_task_info.worker = worker;
+        tls_task_info.worker_index = worker ? worker->index() : -1;
     }
     else
     {
         tls_task_info.magic = 0xdeadbeef;
         tls_task_info.worker = worker;
+        tls_task_info.worker_index = worker ? worker->index() : -1;
         tls_task_info.current_task = nullptr;
     }
 }
@@ -202,7 +176,7 @@ void task::signal_waiters()
 }
 
 // multiple callers may wait on this
-bool task::wait(int timeout_milliseconds)
+bool task::wait(int timeout_milliseconds, bool on_cancel)
 {
     dassert (this != task::get_current_task(), "task cannot wait itself");
 
@@ -213,7 +187,10 @@ bool task::wait(int timeout_milliseconds)
     }
 
     auto cs = state();
-    service::lock_checker::check_wait_task(this, cs == TASK_STATE_RUNNING);
+    if (!on_cancel)
+    {
+        service::lock_checker::check_wait_task(this);
+    }
 
     if (cs >= TASK_STATE_FINISHED)
     {
@@ -247,13 +224,13 @@ bool task::wait(int timeout_milliseconds)
 }
 
 //
-// return - whether the task has completed (not necessarily cancelled though)
+// return - whether this cancel succeed
 //
-bool task::cancel(bool wait_until_finished, /*out*/ bool* cancel_success /*= nullptr*/)
+bool task::cancel(bool wait_until_finished, /*out*/ bool* finished /*= nullptr*/)
 {
     task_state READY_STATE = TASK_STATE_READY;
     task *current_tsk = task::get_current_task();
-    bool ret = true;
+    bool finish = false;
     bool succ = false;
     
     if (current_tsk == this)
@@ -264,8 +241,8 @@ bool task::cancel(bool wait_until_finished, /*out*/ bool* cancel_success /*= nul
             id()
             );*/
 
-        if (cancel_success)
-            *cancel_success = false;
+        if (finished)
+            *finished = false;
 
         return false;
     }
@@ -273,22 +250,34 @@ bool task::cancel(bool wait_until_finished, /*out*/ bool* cancel_success /*= nul
     if (_state.compare_exchange_strong(READY_STATE, TASK_STATE_CANCELLED))
     {
         succ = true;
+        finish = true;
     }
     else
     {
         task_state old_state = _state.load();
-        if ((old_state == TASK_STATE_CANCELLED) || (old_state == TASK_STATE_FINISHED))
+        if (old_state == TASK_STATE_CANCELLED)
         {
+            succ = false; // this cancellation fails
+            finish = true;
+        }
+        else if (old_state == TASK_STATE_FINISHED)
+        {
+            succ = false;
+            finish = true;
         }
         else if (wait_until_finished)
         {
             _wait_for_cancel = true;
-            bool r  = wait();
+            bool r  = wait(TIME_MS_MAX, true);
             dassert(r, "wait failed, it is only possible when task runs for more than 0x0fffffff ms");
+
+            succ = false;
+            finish = true;
         }
         else
         {
-            ret = false;
+            succ = false;
+            finish = false;
         }
     }
 
@@ -303,10 +292,10 @@ bool task::cancel(bool wait_until_finished, /*out*/ bool* cancel_success /*= nul
         signal_waiters();
     }
 
-    if (cancel_success)
-        *cancel_success = succ;
+    if (finished)
+        *finished = finish;
 
-    return ret;
+    return succ;
 }
 
 const char* task::node_name() const
@@ -340,14 +329,16 @@ void task::enqueue(task_worker_pool* pool)
     // normal path
     else
     {
-        dassert(pool != nullptr, "pool not exist, "
-            "must be the case where the caller is executed in io threads "
-            "which is forbidden unless you explicitly set [task.%s].fast_execution_in_network_thread = true",
+        dassert(pool != nullptr, "pool %s not ready, and there are usually two cases: "
+            "(1). thread pool not designatd in '[%s] pools'; "
+            "(2). the caller is executed in io threads "
+            "which is forbidden unless you explicitly set [task.%s].fast_execution_in_network_thread = true",            
+            _spec->pool_code.to_string(),
+            _node->spec().config_section.c_str(),
             _spec->name
             );
 
-        task_ptr this_(this);
-        pool->enqueue(this_);
+        pool->enqueue(this);
     }
 }
 
@@ -410,7 +401,7 @@ rpc_response_task::rpc_response_task(message_ptr& request, int hash)
 void rpc_response_task::enqueue(error_code err, message_ptr& reply)
 {
     set_error_code(err);
-    _response = (err == ERR_SUCCESS ? reply : nullptr);
+    _response = (err == ERR_OK ? reply : nullptr);
 
     if (spec().on_rpc_response_enqueue.execute(this, true))
     {

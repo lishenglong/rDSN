@@ -23,13 +23,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
+# ifndef _WIN32
+
 # include <dsn/internal/logging.h>
 # include <dsn/internal/coredump.h>
 # include <dsn/tool_api.h>
 
-//#ifdef _WIN32
-# if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "coredump"
 
 namespace dsn {
@@ -55,5 +58,5 @@ namespace dsn {
     }
 }
 
-# endif // #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+# endif
 

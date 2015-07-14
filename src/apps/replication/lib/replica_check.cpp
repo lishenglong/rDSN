@@ -28,7 +28,10 @@
 #include "mutation_log.h"
 #include "replica_stub.h"
 
-#define __TITLE__ "GroupCheck"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "GroupCheck"
 
 namespace dsn { namespace replication {
 
@@ -144,7 +147,7 @@ void replica::on_group_check(const group_check_request& request, __out_param gro
     
     response.gpid = get_gpid();
     response.node = primary_address();
-    response.err = ERR_SUCCESS;
+    response.err = ERR_OK;
     if (status() == PS_ERROR)
     {
         response.err = ERR_INVALID_STATE;
@@ -172,7 +175,7 @@ void replica::on_group_check_reply(error_code err, std::shared_ptr<group_check_r
     }
     else
     {
-        if (resp->err == ERR_SUCCESS)
+        if (resp->err == ERR_OK)
         {
             if (resp->learner_status_ == LearningSucceeded && req->config.status == PS_POTENTIAL_SECONDARY)
             {

@@ -26,6 +26,9 @@
 # include "net_client_session.h"
 # include <dsn/internal/logging.h>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "net.session"
 
 namespace dsn {
@@ -34,7 +37,7 @@ namespace dsn {
             asio_network_provider& net, 
             boost::asio::ip::tcp::socket& socket,
             const end_point& remote_addr, 
-            std::shared_ptr<rpc_client_matcher>& matcher,
+            rpc_client_matcher_ptr& matcher,
             std::shared_ptr<message_parser>& parser)
             : 
             _net(net),

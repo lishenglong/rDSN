@@ -28,7 +28,10 @@
 #include "mutation_log.h"
 #include "replica_stub.h"
 
-#define __TITLE__ "replica"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "replica"
 
 namespace dsn { namespace replication {
 
@@ -69,7 +72,8 @@ void replica::init_state()
             &replica::execute_mutation,
             this,
             std::placeholders::_1
-            )
+            ),
+        _options.prepare_ack_on_secondary_before_logging_allowed
     );
 
     _config.ballot = 0;
@@ -105,6 +109,16 @@ void replica::on_client_read(const read_request_header& meta, message_ptr& reque
         return;
     }
 
+    if (meta.semantic == read_semantic_t::ReadLastUpdate)
+    {
+        if (status() != PS_PRIMARY || 
+            last_committed_decree() < _primary_states.last_prepare_decree_on_new_primary)
+        {
+            response_client_message(request, ERR_INVALID_STATE);
+            return;
+        }
+    }
+
     dassert (_app != nullptr, "");
     _app->dispatch_rpc_call(meta.code, request, true);
 }
@@ -118,7 +132,7 @@ void replica::response_client_message(message_ptr& request, error_code error, de
     int err = error.get();
     resp->writer().write(err);
 
-    dassert(error != ERR_SUCCESS, "");
+    dassert(error != ERR_OK, "");
     dinfo("handle replication request with rpc_id = %016llx failed, err = %s",
         request->header().rpc_id, error.to_string());
 
@@ -129,7 +143,7 @@ void replica::execute_mutation(mutation_ptr& mu)
 {
     dassert (nullptr != _app, "");
 
-    int err = ERR_SUCCESS;
+    int err = ERR_OK;
     switch (status())
     {
     case PS_INACTIVE:
@@ -172,10 +186,10 @@ void replica::execute_mutation(mutation_ptr& mu)
     case PS_ERROR:
         break;
     }
-     
+    
     ddebug("TwoPhaseCommit, %s: mutation %s committed, err = %x", name(), mu->name(), err);
 
-    if (err != ERR_SUCCESS)
+    if (err != ERR_OK)
     {
         handle_local_failure(err);
     }
@@ -209,8 +223,12 @@ decree replica::last_prepared_decree() const
     while (true)
     {
         auto mu = _prepare_list->get_mutation_by_decree(start + 1);
-        if (mu == nullptr || mu->data.header.ballot < lastBallot || !mu->is_prepared())
+        if (mu == nullptr 
+            || mu->data.header.ballot < lastBallot 
+            || (!mu->is_logged() && !_options.prepare_ack_on_secondary_before_logging_allowed)
+            )
             break;
+
         start++;
         lastBallot = mu->data.header.ballot;
     }

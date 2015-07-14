@@ -28,14 +28,17 @@
 #include <dsn/internal/singleton_store.h>
 #include "network.sim.h" 
 
-#define __TITLE__ "net.provider.sim"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "net.provider.sim"
 
 namespace dsn { namespace tools {
 
     // multiple machines connect to the same switch, 10 should be >= than rpc_channel::max_value() + 1
     static utils::singleton_store<end_point, sim_network_provider*> s_switch[10]; 
 
-    sim_client_session::sim_client_session(sim_network_provider& net, const end_point& remote_addr, std::shared_ptr<rpc_client_matcher>& matcher)
+    sim_client_session::sim_client_session(sim_network_provider& net, const end_point& remote_addr, rpc_client_matcher_ptr& matcher)
         : rpc_client_session(net, remote_addr, matcher)
     {}
 
@@ -101,8 +104,8 @@ namespace dsn { namespace tools {
         auto config = tool_app::get_service_spec().config;
         if (config != NULL)
         {
-            _min_message_delay_microseconds = config->get_value<uint32_t>("dsn.simulation", "min_message_delay_microseconds", _min_message_delay_microseconds);
-            _max_message_delay_microseconds = config->get_value<uint32_t>("dsn.simulation", "max_message_delay_microseconds", _max_message_delay_microseconds);
+            _min_message_delay_microseconds = config->get_value<uint32_t>("tools.simulator", "min_message_delay_microseconds", _min_message_delay_microseconds);
+            _max_message_delay_microseconds = config->get_value<uint32_t>("tools.simulator", "max_message_delay_microseconds", _max_message_delay_microseconds);
         }
     }
 
@@ -119,14 +122,14 @@ namespace dsn { namespace tools {
             if (s_switch[channel].put(_address, this))
             {
                 s_switch[channel].put(ep2, this);
-                return ERR_SUCCESS;
+                return ERR_OK;
             }   
             else
                 return ERR_ADDRESS_ALREADY_USED;
         }
         else
         {
-            return ERR_SUCCESS;
+            return ERR_OK;
         }
     }
 

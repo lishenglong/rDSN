@@ -31,7 +31,10 @@
 #include "rpc_replicated.h"
 #include <boost/filesystem.hpp>
 
-#define __TITLE__ "Stub"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "replica.stub"
 
 namespace dsn { namespace replication {
 
@@ -115,7 +118,7 @@ void replica_stub::initialize(const replication_options& opts, configuration_ptr
     // init logs
     _log = new mutation_log(opts.log_buffer_size_mb, opts.log_pending_max_ms, opts.log_file_size_mb, opts.log_batch_write, opts.log_max_concurrent_writes);
     int err = _log->initialize(logDir.c_str());
-    dassert (err == ERR_SUCCESS, "");
+    dassert (err == ERR_OK, "");
     
     err = _log->replay(
         std::bind(&replica_stub::replay_mutation, this, std::placeholders::_1, &rps)
@@ -135,7 +138,7 @@ void replica_stub::initialize(const replication_options& opts, configuration_ptr
             it->second->get_ballot()
             );
 
-        it->second->set_inactive_state_transient(err == ERR_SUCCESS);
+        it->second->set_inactive_state_transient(err == ERR_OK);
     }
 
     // start log serving    
@@ -157,7 +160,7 @@ void replica_stub::initialize(const replication_options& opts, configuration_ptr
         initMaxDecrees[it->second->get_gpid()] = it->second->max_prepared_decree();
     }
     err = _log->start_write_service(initMaxDecrees, _options.staleness_for_commit);
-    dassert (err == ERR_SUCCESS, "");
+    dassert (err == ERR_OK, "");
 
     // attach rps
     _replicas = rps;
@@ -287,9 +290,16 @@ void replica_stub::on_config_proposal(const configuration_update_request& propos
     if (!is_connected()) return;
 
     replica_ptr rep = get_replica(proposal.config.gpid, proposal.type == CT_ASSIGN_PRIMARY, proposal.config.app_type.c_str());
-    if (rep == nullptr && proposal.type == CT_ASSIGN_PRIMARY)
+    if (rep == nullptr)
     {
-        begin_open_replica(proposal.config.app_type, proposal.config.gpid);
+        if (proposal.type == CT_ASSIGN_PRIMARY)
+        {
+            begin_open_replica(proposal.config.app_type, proposal.config.gpid);
+        }   
+        else if (proposal.type == CT_UPGRADE_TO_PRIMARY)
+        {
+            remove_replica_on_meta_server(proposal.config);
+        }
     }
 
     if (rep != nullptr)
@@ -303,7 +313,7 @@ void replica_stub::on_query_decree(const query_replica_decree_request& req, __ou
     replica_ptr rep = get_replica(req.gpid);
     if (rep != nullptr)
     {
-        resp.err = ERR_SUCCESS;
+        resp.err = ERR_OK;
         if (PS_POTENTIAL_SECONDARY == rep->status())
         {
             resp.last_decree = 0;
@@ -357,7 +367,7 @@ void replica_stub::on_group_check(const group_check_request& request, __out_para
             *req = request;
 
             begin_open_replica(request.app_type, request.config.gpid, req);
-            response.err = ERR_SUCCESS;
+            response.err = ERR_OK;
             response.learner_signature = 0;
         }
         else
@@ -493,7 +503,7 @@ void replica_stub::on_node_query_reply(int err, message_ptr& request, message_pt
         configuration_query_by_node_response resp;
         unmarshall(response, resp);     
 
-        if (resp.err != ERR_SUCCESS)
+        if (resp.err != ERR_OK)
             return;
         
         replicas rs = _replicas;
@@ -548,14 +558,16 @@ void replica_stub::on_node_query_reply_scatter(replica_stub_ptr this_, const par
     }
     else
     {
-
         ddebug(
             "%u.%u @ %s:%d: replica not exists on replica server, remove it from meta server",
             config.gpid.app_id, config.gpid.pidx,
             primary_address().name.c_str(), static_cast<int>(primary_address().port)
             );
 
-        remove_replica_on_meta_server(config);
+        if (config.primary == primary_address())
+        {
+            remove_replica_on_meta_server(config);
+        }
     }
 }
 
@@ -862,7 +874,7 @@ void replica_stub::open_service()
 
     register_rpc_handler(RPC_PREPARE, "prepare", &replica_stub::on_prepare);
     register_rpc_handler(RPC_LEARN, "Learn", &replica_stub::on_learn);
-    register_rpc_handler(RPC_LEARN_COMPLETITION_NOTIFY, "LearnNotify", &replica_stub::on_learn_completion_notification);
+    register_rpc_handler(RPC_LEARN_COMPLETION_NOTIFY, "LearnNotify", &replica_stub::on_learn_completion_notification);
     register_rpc_handler(RPC_LEARN_ADD_LEARNER, "LearnAdd", &replica_stub::on_add_learner);
     register_rpc_handler(RPC_REMOVE_REPLICA, "remove", &replica_stub::on_remove);
     register_rpc_handler(RPC_GROUP_CHECK, "GroupCheck", &replica_stub::on_group_check);

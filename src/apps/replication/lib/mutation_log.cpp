@@ -30,7 +30,10 @@
 #include <io.h>
 #endif
 
-#define __TITLE__ "mutation_log"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "mutation_log"
 
 namespace dsn { namespace replication {
 
@@ -128,7 +131,7 @@ int mutation_log::initialize(const char* dir)
         _global_end_offset = it->second->end_offset();
     }
     
-    return ERR_SUCCESS;
+    return ERR_OK;
 }
 
 int mutation_log::create_new_log_file()
@@ -163,9 +166,9 @@ int mutation_log::create_new_log_file()
     auto len = logFile->write_header(_pending_write, _init_prepared_decrees, 
         static_cast<int>(_log_buffer_size_bytes));
     _global_end_offset += len;
-    dassert (_pending_write->total_size() == len + message_header::serialized_size(), "");
+    dassert (_pending_write->total_size() == len + MSG_HDR_SERIALIZED_SIZE, "");
 
-    return ERR_SUCCESS;
+    return ERR_OK;
 }
 
 void mutation_log::create_new_pending_buffer()
@@ -188,8 +191,8 @@ void mutation_log::create_new_pending_buffer()
             );
     }
 
-    dassert (_pending_write->total_size() == message_header::serialized_size(), "");
-    _global_end_offset += message_header::serialized_size();
+    dassert (_pending_write->total_size() == MSG_HDR_SERIALIZED_SIZE, "");
+    _global_end_offset += MSG_HDR_SERIALIZED_SIZE;
 }
 
 void mutation_log::internal_pending_write_timer(uint64_t id)
@@ -250,13 +253,13 @@ int mutation_log::write_pending_mutations(bool create_new_log_when_necessary)
     if (create_new_log_when_necessary && _current_log_file->end_offset() - _current_log_file->start_offset() >= _max_log_file_size_in_bytes)
     {
         int ret = create_new_log_file();
-        if (ERR_SUCCESS != ret)
+        if (ERR_OK != ret)
         {
             derror ("create new log file failed, err = %d", ret);
         }
         return ret;
     }
-    return ERR_SUCCESS;
+    return ERR_OK;
 }
 
 void mutation_log::internal_write_callback(error_code err, uint32_t size, mutation_log::pending_callbacks_ptr callbacks, blob data)
@@ -275,7 +278,7 @@ int mutation_log::replay(ReplayCallback callback)
     zauto_lock l(_lock);
 
     int64_t offset = start_offset();
-    int err = ERR_SUCCESS;
+    int err = ERR_OK;
     for (auto it = _log_files.begin(); it != _log_files.end(); it++)
     {
         log_file_ptr log = it->second;
@@ -290,11 +293,11 @@ int mutation_log::replay(ReplayCallback callback)
 
         ::dsn::blob bb;
         err = log->read_next_log_entry(bb);
-        if (err != ERR_SUCCESS)
+        if (err != ERR_OK)
         {
             if (err == ERR_HANDLE_EOF)
             {
-                err = ERR_SUCCESS;
+                err = ERR_OK;
                 continue;
             }
 
@@ -305,7 +308,7 @@ int mutation_log::replay(ReplayCallback callback)
 
 
         message_ptr msg(new message(bb));
-        offset += message_header::serialized_size();
+        offset += MSG_HDR_SERIALIZED_SIZE;
 
         if (!msg->is_right_body())
         {
@@ -336,11 +339,11 @@ int mutation_log::replay(ReplayCallback callback)
             }
 
             err = log->read_next_log_entry(bb);
-            if (err != ERR_SUCCESS)
+            if (err != ERR_OK)
             {
                 if (err == ERR_HANDLE_EOF)
                 {
-                    err = ERR_SUCCESS;
+                    err = ERR_OK;
                     break;
                 }
 
@@ -350,7 +353,7 @@ int mutation_log::replay(ReplayCallback callback)
             }
             
             msg = new message(bb);
-            offset += message_header::serialized_size();
+            offset += MSG_HDR_SERIALIZED_SIZE;
 
             if (!msg->is_right_body())
             {
@@ -362,7 +365,7 @@ int mutation_log::replay(ReplayCallback callback)
         log->close();
 
         // tail data corruption is checked by next file's offset checking
-        if (err != ERR_INVALID_DATA && err != ERR_SUCCESS)
+        if (err != ERR_INVALID_DATA && err != ERR_OK)
             break;        
     }
 
@@ -371,7 +374,7 @@ int mutation_log::replay(ReplayCallback callback)
         // remove bad data at tail, but still we may lose data so error code remains unchanged
         _global_end_offset = offset;
     }
-    else if (err == ERR_SUCCESS)
+    else if (err == ERR_OK)
     {
         dassert (end_offset() == offset, "");
     }
@@ -398,7 +401,9 @@ void mutation_log::close()
 
         if (nullptr != _pending_write_timer)
         {
-            if (_pending_write_timer->cancel(false))
+            bool finish;
+            _pending_write_timer->cancel(false, &finish);
+            if (finish)
             {
                 _pending_write_timer = nullptr;
                 write_pending_mutations(false);
@@ -428,7 +433,7 @@ task_ptr mutation_log::append(mutation_ptr& mu,
 {
     zauto_lock l(_lock);
 
-    if (nullptr == _current_log_file) return nullptr;
+    dassert(nullptr != _current_log_file, "");
 
     auto it = _init_prepared_decrees.find(mu->data.header.gpid);
     if (it != _init_prepared_decrees.end())
@@ -669,19 +674,19 @@ int log_file::read_next_log_entry(__out_param ::dsn::blob& bb)
 {
     dassert (_is_read, "");
 
-    std::shared_ptr<char> hdrBuffer(new char[message_header::serialized_size()]);
+    std::shared_ptr<char> hdrBuffer(new char[MSG_HDR_SERIALIZED_SIZE]);
     
     int read_count = ::read(
         (int)(_handle),
         hdrBuffer.get(),
-        message_header::serialized_size()
+        MSG_HDR_SERIALIZED_SIZE
         );
 
-    if (message_header::serialized_size() != read_count)
+    if (MSG_HDR_SERIALIZED_SIZE != read_count)
     {
         if (read_count > 0)
         {
-            derror("incomplete read data, size = %d vs %d", read_count, message_header::serialized_size());
+            derror("incomplete read data, size = %d vs %d", read_count, MSG_HDR_SERIALIZED_SIZE);
             return ERR_INVALID_DATA;
         }
         else
@@ -691,7 +696,7 @@ int log_file::read_next_log_entry(__out_param ::dsn::blob& bb)
     }
 
     message_header hdr;
-    ::dsn::blob bb2(hdrBuffer, message_header::serialized_size());
+    ::dsn::blob bb2(hdrBuffer, MSG_HDR_SERIALIZED_SIZE);
     ::dsn::binary_reader reader(bb2);
     hdr.unmarshall(reader);
 
@@ -701,23 +706,23 @@ int log_file::read_next_log_entry(__out_param ::dsn::blob& bb)
         return ERR_INVALID_DATA;
     }
 
-    std::shared_ptr<char> data(new char[message_header::serialized_size() + hdr.body_length]);
-    memcpy(data.get(), hdrBuffer.get(), message_header::serialized_size());
-    bb.assign(data, 0, message_header::serialized_size() + hdr.body_length);
+    std::shared_ptr<char> data(new char[MSG_HDR_SERIALIZED_SIZE + hdr.body_length]);
+    memcpy(data.get(), hdrBuffer.get(), MSG_HDR_SERIALIZED_SIZE);
+    bb.assign(data, 0, MSG_HDR_SERIALIZED_SIZE + hdr.body_length);
 
     read_count = ::read(
         (int)(_handle),
-        (void*)((char*)bb.data() + message_header::serialized_size()),
+        (void*)((char*)bb.data() + MSG_HDR_SERIALIZED_SIZE),
         hdr.body_length
         );
 
     if (hdr.body_length != read_count)
     {
-        derror("incomplete read data, size = %d vs %d", read_count, message_header::serialized_size());
+        derror("incomplete read data, size = %d vs %d", read_count, MSG_HDR_SERIALIZED_SIZE);
         return ERR_INVALID_DATA;
     }
     
-    return ERR_SUCCESS;
+    return ERR_OK;
 }
 
 aio_task_ptr log_file::write_log_entry(

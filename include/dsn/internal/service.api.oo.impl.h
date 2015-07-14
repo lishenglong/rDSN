@@ -33,7 +33,7 @@ namespace dsn {
             namespace internal_use_only
             {
                 template<typename T, typename TRequest, typename TResponse>
-                class service_rpc_response_task1 : public rpc_response_task, public service_context_manager
+                class service_rpc_response_task1 : public rpc_response_task, public task_context_manager
                 {
                 public:
                     service_rpc_response_task1(
@@ -43,7 +43,7 @@ namespace dsn {
                         message_ptr& request,
                         int hash = 0
                         )
-                        : rpc_response_task(request, hash), service_context_manager(svc, this)
+                        : rpc_response_task(request, hash), task_context_manager(svc, this)
                     {
                         _svc = svc;
                         _req = req;
@@ -52,7 +52,7 @@ namespace dsn {
 
                     virtual void on_response(error_code err, message_ptr& request, message_ptr& response)
                     {
-                        if (err == ERR_SUCCESS)
+                        if (err == ERR_OK)
                         {
                             std::shared_ptr<TResponse> resp(new TResponse);
                             unmarshall(response->reader(), *resp);
@@ -72,7 +72,7 @@ namespace dsn {
                 };
 
                 template<typename TRequest, typename TResponse>
-                class service_rpc_response_task2 : public rpc_response_task, public service_context_manager
+                class service_rpc_response_task2 : public rpc_response_task, public task_context_manager
                 {
                 public:
                     service_rpc_response_task2(
@@ -82,17 +82,17 @@ namespace dsn {
                         message_ptr& request,
                         int hash = 0
                         )
-                        : rpc_response_task(request, hash), service_context_manager(svc, this)
+                        : rpc_response_task(request, hash), task_context_manager(svc, this)
                     {
                         _req = req;
-                        _callback = callback;
+                        _callback = std::move(callback);
                     }
 
                     virtual void on_response(error_code err, message_ptr& request, message_ptr& response)
                     {
                         if (nullptr != _callback)
                         {
-                            if (err == ERR_SUCCESS)
+                            if (err == ERR_OK)
                             {
                                 std::shared_ptr<TResponse> resp(new TResponse);
                                 unmarshall(response->reader(), *resp);
@@ -113,7 +113,7 @@ namespace dsn {
                 };
 
                 template<typename TResponse>
-                class service_rpc_response_task3 : public rpc_response_task, public service_context_manager
+                class service_rpc_response_task3 : public rpc_response_task, public task_context_manager
                 {
                 public:
                     service_rpc_response_task3(
@@ -123,9 +123,9 @@ namespace dsn {
                         message_ptr& request,
                         int hash = 0
                         )
-                        : rpc_response_task(request, hash), service_context_manager(svc, this)
+                        : rpc_response_task(request, hash), task_context_manager(svc, this)
                     {
-                        _callback = callback;
+                        _callback = std::move(callback);
                         _context = context;
                     }
 
@@ -134,7 +134,7 @@ namespace dsn {
                         if (nullptr != _callback)
                         {
                             TResponse resp;
-                            if (err == ERR_SUCCESS)
+                            if (err == ERR_OK)
                             {
                                 unmarshall(response->reader(), resp);
                                 _callback(err, resp, _context);
@@ -152,7 +152,7 @@ namespace dsn {
                     void* _context;
                 };
 
-                class service_rpc_response_task4 : public rpc_response_task, public service_context_manager
+                class service_rpc_response_task4 : public rpc_response_task, public task_context_manager
                 {
                 public:
                     service_rpc_response_task4(
@@ -161,9 +161,9 @@ namespace dsn {
                         message_ptr& request,
                         int hash = 0
                         )
-                        : rpc_response_task(request, hash), service_context_manager(svc, this)
+                        : rpc_response_task(request, hash), task_context_manager(svc, this)
                     {
-                        _callback = callback;
+                        _callback = std::move(callback);
                     }
 
                     virtual void on_response(error_code err, message_ptr& request, message_ptr& response)
@@ -181,7 +181,7 @@ namespace dsn {
 
 
                 template<typename T, typename TResponse>
-                class service_rpc_response_task5 : public rpc_response_task, public service_context_manager
+                class service_rpc_response_task5 : public rpc_response_task, public task_context_manager
                 {
                 public:
                     service_rpc_response_task5(
@@ -191,7 +191,7 @@ namespace dsn {
                         message_ptr& request,                        
                         int hash = 0
                         )
-                        : rpc_response_task(request, hash), service_context_manager(svc, this)
+                        : rpc_response_task(request, hash), task_context_manager(svc, this)
                     {
                         _svc = svc;
                         _callback = callback;
@@ -201,7 +201,7 @@ namespace dsn {
                     virtual void on_response(error_code err, message_ptr& request, message_ptr& response)
                     {
                         TResponse resp;
-                        if (err == ERR_SUCCESS)
+                        if (err == ERR_OK)
                         {
                             unmarshall(response->reader(), resp);
                             (_svc->*_callback)(err, resp, _context);
@@ -256,7 +256,8 @@ namespace dsn {
                     reply_hash
                     ));
 
-                return rpc::call(server, msg, resp_task);
+                rpc::call(server, msg, resp_task);
+                return std::move(resp_task);
             }
 
             template<typename TRequest, typename TResponse>
@@ -282,7 +283,8 @@ namespace dsn {
                     reply_hash
                     ));
 
-                return rpc::call(server, msg, resp_task);
+                rpc::call(server, msg, resp_task);
+                return std::move(resp_task);
             }
 
             template<typename T, typename TRequest, typename TResponse>
@@ -309,7 +311,8 @@ namespace dsn {
                     reply_hash
                     ));
 
-                return rpc::call(server, msg, resp_task);
+                rpc::call(server, msg, resp_task);
+                return std::move(resp_task);
             }
 
             template<typename TRequest, typename TResponse>
@@ -336,7 +339,8 @@ namespace dsn {
                     reply_hash
                     ));
 
-                return rpc::call(server, msg, resp_task);
+                rpc::call(server, msg, resp_task);
+                return std::move(resp_task);
             }
 
             template<typename TRequest, typename TResponse>
@@ -349,14 +353,14 @@ namespace dsn {
                     )
                 {
                     _req = req;
-                    _callback = callback;
+                    _callback = std::move(callback);
                 }
 
                 virtual bool exec(
                     error_code err,
                     message_ptr& response)
                 {
-                    if (err == ERR_SUCCESS)
+                    if (err == ERR_OK)
                     {
                         auto r = std::shared_ptr<TResponse>(new TResponse);
                         unmarshall(response->reader(), *r);
@@ -374,7 +378,7 @@ namespace dsn {
             inline layered_rpc::layered_rpc(servicelet* owner, message_ptr& request, int hash)
                 : 
                 rpc_response_task(request, hash),
-                service_context_manager(owner, this)
+                task_context_manager(owner, this)
             {
             }
 
@@ -428,7 +432,8 @@ namespace dsn {
                 dassert(_handlers.size() > 0, "");
 
                 auto cb = rpc_response_task_ptr(static_cast<rpc_response_task*>(this));
-                return rpc::call(server, cb->get_request(), cb);
+                rpc::call(server, cb->get_request(), cb);
+                return std::move(cb);
             }
 
             inline layered_rpc::~layered_rpc()
@@ -443,13 +448,13 @@ namespace dsn {
         {
             namespace internal_use_only 
             {
-                class service_aio_task : public aio_task, public service_context_manager
+                class service_aio_task : public aio_task, public task_context_manager
                 {
                 public:
                     service_aio_task(task_code code, servicelet* svc, aio_handler& handler, int hash = 0)
-                        : aio_task(code, hash), service_context_manager(svc, this)
+                        : aio_task(code, hash), task_context_manager(svc, this)
                     {
-                        _handler = handler;
+                        _handler = std::move(handler);
                     }
 
                     virtual void on_completed(error_code err, uint32_t transferred_size)

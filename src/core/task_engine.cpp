@@ -28,7 +28,10 @@
 # include <dsn/internal/factory_store.h>
 # include <dsn/service_api.h>
 
-#define __TITLE__ "task_engine"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "task_engine"
 
 using namespace dsn::utils;
 
@@ -38,7 +41,6 @@ task_worker_pool::task_worker_pool(const threadpool_spec& opts, task_engine* own
     : _spec(opts), _owner(owner), _node(owner->node())
 {
     _is_running = false;
-    _pending_task_counter = dsn::utils::perf_counters::instance().get_counter((_spec.name + std::string(".PendingTask#")).c_str(),  COUNTER_TYPE_NUMBER, true);
 }
 
 void task_worker_pool::start()
@@ -99,31 +101,31 @@ void task_worker_pool::start()
     _is_running = true;
 }
 
-void task_worker_pool::enqueue(task_ptr& task)
+void task_worker_pool::enqueue(task* t)
 {
-    dassert (task->spec().pool_code == spec().pool_code || task->spec().type == TASK_TYPE_RPC_RESPONSE, "Invalid thread pool used");
+    dassert(t->spec().pool_code == spec().pool_code || t->spec().type == TASK_TYPE_RPC_RESPONSE, "Invalid thread pool used");
 
     if (_is_running)
     {
-        int idx = (_spec.partitioned ? task->hash() % _queues.size() : 0);
+        int idx = (_spec.partitioned ? t->hash() % _queues.size() : 0);
         task_queue* q = _queues[idx];
-        if (task->delay_milliseconds() == 0)
+        //dinfo("%s pool::enqueue %s (%016llx)", _node->name(), task->spec().name, task->id());
+        if (t->delay_milliseconds() == 0)
         {
             auto controller = _controllers[idx];
             if (controller != nullptr)
             {
-                while (!controller->is_task_accepted(task))
+                while (!controller->is_task_accepted(t))
                 {
                     // any customized rejection handler?
-                    if (task->spec().rejection_handler != nullptr)
+                    if (t->spec().rejection_handler != nullptr)
                     {
-                        task->spec().rejection_handler(task.get(), controller);
+                        t->spec().rejection_handler(t, controller);
 
-                        dlog(log_level_DEBUG, __TITLE__,
-                                "timer_task %s (%016llx) is rejected",                            
-                                task->spec().name,
-                                task->id()
-                                );
+                        ddebug("task %s (%016llx) is rejected",                            
+                            t->spec().name,
+                            t->id()
+                            );
 
                         return;
                     }
@@ -131,20 +133,19 @@ void task_worker_pool::enqueue(task_ptr& task)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             }
-            else if (task->spec().type == TASK_TYPE_RPC_REQUEST && _spec.max_input_queue_length != 0xFFFFFFFFUL)
+            else if (t->spec().type == TASK_TYPE_RPC_REQUEST && _spec.max_input_queue_length != 0xFFFFFFFFUL)
             {
                 while ((uint32_t)q->count() >= _spec.max_input_queue_length)
                 {
                     // any customized rejection handler?
-                    if (task->spec().rejection_handler != nullptr)
+                    if (t->spec().rejection_handler != nullptr)
                     {
-                        task->spec().rejection_handler(task.get(), controller);
+                        t->spec().rejection_handler(t, controller);
 
-                        dlog(log_level_DEBUG, __TITLE__,
-                                "task %s (%016llx) is rejected because the target queue is full",                            
-                                task->spec().name,
-                                task->id()
-                                );
+                        ddebug("task %s (%016llx) is rejected because the target queue is full",                            
+                            t->spec().name,
+                            t->id()
+                            );
 
                         return;
                     }
@@ -152,25 +153,20 @@ void task_worker_pool::enqueue(task_ptr& task)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             }
-
-            _pending_task_counter->increment();
         }
-                
-        return q->enqueue(task);
+
+        // add reference before adding to the queue
+        t->add_ref();
+        return q->enqueue(t);
     }
     else
     {
         dassert (false, "worker pool %s must be started before enqueue task %s",
             spec().name.c_str(),
-            task->spec().name
+            t->spec().name
             );
     }
 }
-//
-//void task_worker_pool::on_dequeue(int count)
-//{
-//    _pending_task_counter->Subtract((unsigned long long)count);
-//}
 
 bool task_worker_pool::shared_same_worker_with_current_task(task* tsk) const
 {
@@ -197,30 +193,63 @@ bool task_worker_pool::shared_same_worker_with_current_task(task* tsk) const
     }
 }
 
+void task_worker_pool::get_runtime_info(const std::string& indent, const std::vector<std::string>& args, __out_param std::stringstream& ss)
+{
+    std::string indent2 = indent + "\t";
+    ss << indent << "contains " << _workers.size() << " threads with " << _queues.size() << " queues" << std::endl;
+    
+    for (auto& q : _queues)
+    {
+        if (q)
+        {
+            ss << indent2 << q->get_name() << " now has " << q->count() << " pending tasks" << std::endl;
+        }
+    }
+
+    for (auto& wk : _workers)
+    {
+        if (wk)
+        {
+            ss << indent2 << wk->index() << " (TID = " << wk->native_tid() << ") attached with queue " << wk->queue()->get_name() << std::endl;
+        }
+    }
+}
+
 task_engine::task_engine(service_node* node)
 {
     _is_running = false;
     _node = node;
 }
 
-void task_engine::start(const std::vector<threadpool_spec>& spec)
+void task_engine::start(const std::list<threadpool_code>& pools)
 {
     if (_is_running)
         return;
 
     // init pools
-    _pools.resize(threadpool_code::max_value() + 1);
-    for (auto it = spec.begin(); it != spec.end(); it++)
+    _pools.resize(threadpool_code::max_value() + 1, nullptr);
+    for (auto& p : pools)
     {
-        if ((*it).run)
-        {
-            auto workerPool = new task_worker_pool(*it, this);
-            workerPool->start();
-            _pools[workerPool->spec().pool_code] = workerPool;
-        }
+        auto& s = service_engine::instance().spec().threadpool_specs[p];
+        auto workerPool = new task_worker_pool(s, this);
+        workerPool->start();
+        _pools[p] = workerPool;
     }
 
     _is_running = true;
+}
+
+void task_engine::get_runtime_info(const std::string& indent, const std::vector<std::string>& args, __out_param std::stringstream& ss)
+{
+    std::string indent2 = indent + "\t";
+    for (auto& p : _pools)
+    {
+        if (p)
+        {
+            ss << indent << p->spec().pool_code.to_string() << std::endl;
+            p->get_runtime_info(indent2, args, ss);
+        }
+    }
 }
 
 } // end namespace

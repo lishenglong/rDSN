@@ -26,17 +26,22 @@
 #include "prepare_list.h"
 #include "mutation.h"
 
-#define __TITLE__ "prepare_list"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "prepare_list"
 
 namespace dsn { namespace replication {
 
 prepare_list::prepare_list(
         decree init_decree, int max_count,
-        mutation_committer committer)
+        mutation_committer committer,
+        bool allow_prepare_ack_before_logging)
         : mutation_cache(init_decree, max_count)
 {
     _committer = committer;
-    _lastCommittedDecree = 0;
+    _last_committed_decree = 0;
+    _allow_prepare_ack_before_logging = allow_prepare_ack_before_logging;
 }
 
 void prepare_list::sanity_check()
@@ -48,7 +53,7 @@ void prepare_list::sanity_check()
 
 void prepare_list::reset(decree init_decree)
 {
-    _lastCommittedDecree = init_decree;
+    _last_committed_decree = init_decree;
     mutation_cache::reset(init_decree, true);
 }
 
@@ -58,7 +63,7 @@ void prepare_list::truncate(decree init_decree)
     {
         pop_min();
     }
-    _lastCommittedDecree = init_decree;
+    _last_committed_decree = init_decree;
 }
 
 error_code prepare_list::prepare(mutation_ptr& mu, partition_status status)
@@ -74,7 +79,7 @@ error_code prepare_list::prepare(mutation_ptr& mu, partition_status status)
     case PS_SECONDARY: 
         commit(mu->data.header.last_committed_decree, true);
         err = mutation_cache::put(mu);
-        dassert (err == ERR_SUCCESS, "");
+        dassert (err == ERR_OK, "");
         return err;
 
     case PS_POTENTIAL_SECONDARY:
@@ -90,20 +95,20 @@ error_code prepare_list::prepare(mutation_ptr& mu, partition_status status)
             else
                 break;
         }
-        dassert (err == ERR_SUCCESS, "");
+        dassert (err == ERR_OK, "");
         return err;
      
     case PS_INACTIVE: // only possible during init  
-        err = ERR_SUCCESS;
+        err = ERR_OK;
         if (mu->data.header.last_committed_decree > max_decree())
         {
             reset(mu->data.header.last_committed_decree);
         }
-        else if (mu->data.header.last_committed_decree > _lastCommittedDecree)
+        else if (mu->data.header.last_committed_decree > _last_committed_decree)
         {
             for (decree d = last_committed_decree() + 1; d <= mu->data.header.last_committed_decree; d++)
             {
-                _lastCommittedDecree++;   
+                _last_committed_decree++;   
                 if (count() == 0)
                     break;
                 
@@ -115,12 +120,12 @@ error_code prepare_list::prepare(mutation_ptr& mu, partition_status status)
                 }
             }
 
-            dassert (_lastCommittedDecree == mu->data.header.last_committed_decree, "");
+            dassert (_last_committed_decree == mu->data.header.last_committed_decree, "");
             sanity_check();
         }
         
         err = mutation_cache::put(mu);
-        dassert (err == ERR_SUCCESS, "");
+        dassert (err == ERR_OK, "");
         return err;
 
     default:
@@ -144,15 +149,15 @@ bool prepare_list::commit(decree d, bool force)
 
         mutation_ptr mu = get_mutation_by_decree(last_committed_decree() + 1);
 
-        while (mu != nullptr && mu->is_ready_for_commit())
+        while (mu != nullptr && mu->is_ready_for_commit(_allow_prepare_ack_before_logging))
         {
-            _lastCommittedDecree++;
+            _last_committed_decree++;
             _committer(mu);
 
-            dassert (mutation_cache::min_decree() == _lastCommittedDecree, "");
+            dassert (mutation_cache::min_decree() == _last_committed_decree, "");
             pop_min();
 
-            mu = mutation_cache::get_mutation_by_decree(_lastCommittedDecree + 1);
+            mu = mutation_cache::get_mutation_by_decree(_last_committed_decree + 1);
         }
     }
     else
@@ -160,12 +165,14 @@ bool prepare_list::commit(decree d, bool force)
         for (decree d0 = last_committed_decree() + 1; d0 <= d; d0++)
         {
             mutation_ptr mu = get_mutation_by_decree(d0);
-            dassert (mu != nullptr && mu->is_prepared(), "");
+            dassert (mu != nullptr && 
+                (mu->is_logged() || _allow_prepare_ack_before_logging)
+                , "");
 
-            _lastCommittedDecree++;
+            _last_committed_decree++;
             _committer(mu);
 
-            dassert (mutation_cache::min_decree() == _lastCommittedDecree, "");
+            dassert (mutation_cache::min_decree() == _last_committed_decree, "");
             pop_min();
         }
     }

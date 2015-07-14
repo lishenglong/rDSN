@@ -26,14 +26,27 @@
 # include <dsn/internal/task_worker.h>
 # include "task_engine.h"
 # include <sstream>
+# include <errno.h>
 
 # ifdef _WIN32
 
-# else 
-//# include <sys/prctl.h>
+# else
+# include <pthread.h>
+
+# ifdef __FreeBSD__
+# include <pthread_np.h>
+# endif
+
+# ifdef __APPLE__
+# include <mach/thread_policy.h>
+# endif
+
 # endif
 
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "task.worker"
 
 namespace dsn {
@@ -46,6 +59,7 @@ task_worker::task_worker(task_worker_pool* pool, task_queue* q, int index, task_
     _owner_pool = pool;
     _input_queue = q;
     _index = index;
+    _native_tid = ::dsn::utils::get_invalid_tid();
 
     char name[256];
     sprintf(name, "%5s.%s.%u", pool->node()->name(), pool->spec().name.c_str(), index);
@@ -117,37 +131,140 @@ void task_worker::set_name()
     }
 
 # else
-//    prctl(PR_SET_NAME, name(), 0, 0, 0)
+    auto thread_name = name()
+    # ifdef __linux__
+        .substr(0, (16 - 1))
+    # endif
+    ;
+    auto tid = _thread->native_handle();
+    int err = 0;
+    # ifdef __FreeBSD__
+    pthread_set_name_np(tid, thread_name.c_str());
+    # elif defined(__linux__)
+    err = pthread_setname_np(tid, thread_name.c_str());
+    # elif defined(__APPLE__)
+    err = pthread_setname_np(thread_name.c_str());
+    # endif
+    if (err != 0)
+    {
+        dwarn("Fail to set pthread name. err = %d", err);
+    }
 # endif
 }
 
 void task_worker::set_priority(worker_priority_t pri)
 {
-# ifdef _WIN32
+# ifndef _WIN32
+    static int policy = SCHED_OTHER;
+    static int prio_max =
+    #ifdef __linux__
+        -20;
+    #else
+        sched_get_priority_max(policy);
+    #endif
+    static int prio_min =
+    #ifdef __linux__
+        19;
+    #else
+        sched_get_priority_min(policy);
+    #endif
+    static int prio_middle = ((prio_min + prio_max + 1) / 2);
+#endif
+
     static int g_thread_priority_map[] = 
     {
+# ifdef _WIN32
         THREAD_PRIORITY_LOWEST,
         THREAD_PRIORITY_BELOW_NORMAL,
         THREAD_PRIORITY_NORMAL,
         THREAD_PRIORITY_ABOVE_NORMAL,
         THREAD_PRIORITY_HIGHEST
+# else
+        prio_min,
+        (prio_min + prio_middle) / 2,
+        prio_middle,
+        (prio_middle + prio_max) / 2,
+        prio_max
+# endif
     };
 
-    C_ASSERT(ARRAYSIZE(g_thread_priority_map) == THREAD_xPRIORITY_COUNT);
+    static_assert(ARRAYSIZE(g_thread_priority_map) == THREAD_xPRIORITY_COUNT,
+        "ARRAYSIZE(g_thread_priority_map) != THREAD_xPRIORITY_COUNT");
 
-    ::SetThreadPriority(_thread->native_handle(), g_thread_priority_map[(pool_spec().worker_priority)]);
+    int prio = g_thread_priority_map[static_cast<int>(pri)];
+    bool succ = true;
+# if !defined(_WIN32) && !defined(__linux__)
+    struct sched_param param;
+    memset(&param, 0, sizeof(struct sched_param));
+    param.sched_priority = prio;
+# endif
+
+# ifdef _WIN32
+    succ = (::SetThreadPriority(_thread->native_handle(), prio) == TRUE);
+# elif defined(__linux__)
+    if ((nice(prio) == -1) && (errno != 0))
+    {
+        succ = false;
+    }
 # else
+    succ = (pthread_setschedparam(_thread->native_handle(), policy, &param) == 0);
 //# error "not implemented"
 # endif
+
+    if (!succ)
+    {
+        dwarn("You may need priviledge to set thread priority. errno = %d.\n", errno);
+    }
 }
 
 void task_worker::set_affinity(uint64_t affinity)
 {
+    dassert(affinity > 0, "affinity cannot be 0.");
+
+    int nr_cpu = static_cast<int>(std::thread::hardware_concurrency());
+    dassert(affinity <= (((uint64_t)1 << nr_cpu) - 1),
+        "There are %d cpus in total, while setting thread affinity to a nonexistent one.", nr_cpu);
+
+    auto tid = _thread->native_handle();
+    int err;
 # ifdef _WIN32
-    ::SetThreadAffinityMask(_thread->native_handle(), static_cast<DWORD_PTR>(affinity));
+    if (::SetThreadAffinityMask(tid, static_cast<DWORD_PTR>(affinity)) == 0)
+    {
+        err = static_cast<int>::GetLastError();
+    }
+# elif defined(__APPLE__)
+    thread_affinity_policy_data_t policy;
+    policy.affinity_tag = static_cast<integer_t>(affinity);
+    err = static_cast<int>(thread_policy_set(
+        static_cast<thread_t>(::dsn::utils::get_current_tid()),
+        THREAD_AFFINITY_POLICY,
+        (thread_policy_t)&policy,
+        THREAD_AFFINITY_POLICY_COUNT
+        ));
 # else
-//# error "not implemented"
+    # ifdef __FreeBSD__
+        # ifndef cpu_set_t
+            # define cpu_set_t cpuset_t
+        # endif
+    # endif
+    cpu_set_t cpuset;
+    int nr_bits = std::min(nr_cpu, static_cast<int>(sizeof(affinity) * 8));
+
+    CPU_ZERO(&cpuset);
+    for (int i = 0; i < nr_bits; i++)
+    {
+        if ((affinity & ((uint64_t)1 << i)) != 0)
+        {
+            CPU_SET(i, &cpuset);
+        }
+    }
+    err = pthread_setaffinity_np(tid, sizeof(cpuset), &cpuset);
 # endif
+
+    if (err != 0)
+    {
+        dwarn("Fail to set thread affinity. err = %d", err);
+    }
 }
 
 void task_worker::run_internal()
@@ -159,6 +276,7 @@ void task_worker::run_internal()
 
     task::set_current_worker(this);
     
+    _native_tid = ::dsn::utils::get_current_tid();
     set_name();
     set_priority(pool_spec().worker_priority);
     
@@ -174,13 +292,13 @@ void task_worker::run_internal()
         uint64_t current_mask = pool_spec().worker_affinity_mask;
         for (int i = 0; i < _index; ++i)
         {            
-            current_mask &= current_mask - 1;
+            current_mask &= (current_mask - 1);
             if (0 == current_mask)
             {
                 current_mask = pool_spec().worker_affinity_mask;
             }
         }
-        current_mask -= current_mask & current_mask - 1;
+        current_mask -= (current_mask & (current_mask - 1));
 
         set_affinity(current_mask);
     }
@@ -199,10 +317,11 @@ void task_worker::loop()
     //try {
         while (_is_running)
         {
-            task_ptr task = q->dequeue();
+            task* task = q->dequeue();
             if (task != nullptr)
             {
                 task->exec_internal();
+                task->release_ref();
             }
         }
     /*}

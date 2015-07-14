@@ -31,13 +31,13 @@ namespace dsn {
     {
         namespace tasking
         {
-            class service_task : public task, public service_context_manager
+            class service_task : public task, public task_context_manager
             {
             public:
                 service_task(task_code code, servicelet* svc, task_handler& handler, int hash = 0)
-                    : task(code, hash), service_context_manager(svc, this)
+                    : task(code, hash), task_context_manager(svc, this)
                 {
-                    _handler = handler;
+                    _handler = std::move(handler);
                 }
 
                 virtual void exec()
@@ -55,13 +55,13 @@ namespace dsn {
                 task_handler _handler;
             };
 
-            class service_timer_task : public timer_task, public service_context_manager
+            class service_timer_task : public timer_task, public task_context_manager
             {
             public:
                 service_timer_task(task_code code, servicelet* svc, task_handler& handler, uint32_t intervalMilliseconds, int hash = 0)
-                    : timer_task(code, intervalMilliseconds, hash), service_context_manager(svc, this)
+                    : timer_task(code, intervalMilliseconds, hash), task_context_manager(svc, this)
                 {
-                    _handler = handler;
+                    _handler = std::move(handler);
                 }
 
                 virtual bool on_timer() { _handler(); return true; }
@@ -69,6 +69,28 @@ namespace dsn {
             private:
                 task_handler _handler;
             };
+
+            // sometimes we need to have task given BFORE the task has been enqueued 
+            // to ensure a happens-before relationship to avoid race
+            void enqueue(
+                __out_param task_ptr& task,
+                task_code evt,
+                servicelet *context,
+                task_handler callback,
+                int hash/* = 0*/,
+                int delay_milliseconds/* = 0*/,
+                int timer_interval_milliseconds/* = 0*/
+                )
+            {
+                task_ptr tsk;
+                if (timer_interval_milliseconds != 0)
+                    tsk.reset(new service_timer_task(evt, context, callback, timer_interval_milliseconds, hash));
+                else
+                    tsk.reset(new service_task(evt, context, callback, hash));
+
+                task = tsk;
+                enqueue(tsk, delay_milliseconds);
+            }
 
             task_ptr enqueue(
                 task_code evt,
@@ -86,7 +108,7 @@ namespace dsn {
                     tsk.reset(new service_task(evt, context, callback, hash));
 
                 enqueue(tsk, delay_milliseconds);
-                return tsk;
+                return std::move(tsk);
             }
         }
 
@@ -108,7 +130,8 @@ namespace dsn {
                     reply_hash
                     ));
 
-                return rpc::call(server, request, resp_task);
+                rpc::call(server, request, resp_task);
+                return std::move(resp_task);
             }
         }
 
@@ -130,7 +153,7 @@ namespace dsn {
                     : static_cast<aio_task*>(new aio_task_empty(callback_code, hash))
                     );
                 read(hFile, buffer, count, offset, tsk);
-                return tsk;
+                return std::move(tsk);
             }
 
             aio_task_ptr write(
@@ -149,7 +172,7 @@ namespace dsn {
                     : static_cast<aio_task*>(new aio_task_empty(callback_code, hash))
                     );
                 write(hFile, buffer, count, offset, tsk);
-                return tsk;
+                return std::move(tsk);
             }
 
 
@@ -170,7 +193,7 @@ namespace dsn {
                     : static_cast<aio_task*>(new aio_task_empty(callback_code, hash))
                     );
                 copy_remote_files(remote, source_dir, files, dest_dir, overwrite, tsk);
-                return tsk;
+                return std::move(tsk);
             }
         }
 

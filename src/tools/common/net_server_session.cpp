@@ -29,6 +29,9 @@
 # include <dsn/internal/logging.h>
 # include <dsn/internal/message_parser.h>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "net.session"
 
 namespace dsn {

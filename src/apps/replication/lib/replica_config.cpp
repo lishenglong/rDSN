@@ -30,7 +30,10 @@
 #include "replication_failure_detector.h"
 #include "rpc_replicated.h"
 
-#define __TITLE__ "Configuration"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "Configuration"
 
 namespace dsn { namespace replication {
 
@@ -56,18 +59,28 @@ void replica::on_config_proposal(configuration_update_request& proposal)
         return;
     }   
 
+    if (_primary_states.reconfiguration_task != nullptr)
+    {
+        dinfo(
+            "%s: reconfiguration on the way, skip the incoming proposal",
+            name()
+            );
+        return;
+    }
+
     if (proposal.config.ballot > get_ballot())
     {
-        if (update_configuration(proposal.config))
+        if (!update_configuration(proposal.config))
         {
-            // is closing
+            // is closing or update failed
             return;
-        }   
+        }
     }
     
     switch (proposal.type)
     {
     case CT_ASSIGN_PRIMARY:
+    case CT_UPGRADE_TO_PRIMARY:
         assign_primary(proposal);
         break;
     case CT_ADD_SECONDARY:
@@ -100,11 +113,20 @@ void replica::assign_primary(configuration_update_request& proposal)
         return;
     }
 
+    if (proposal.type == CT_UPGRADE_TO_PRIMARY && status() != PS_SECONDARY)
+    {
+        dwarn(
+            "%s: invalid upgrade to primary proposal as the node is in %s",
+            name(),
+            enum_to_string(status()));
+        return;
+    }
+
     proposal.config.primary = primary_address();
     replica_helper::remove_node(primary_address(), proposal.config.secondaries);
     replica_helper::remove_node(primary_address(), proposal.config.drop_outs);
 
-    update_configuration_on_meta_server(CT_ASSIGN_PRIMARY, proposal.node, proposal.config);
+    update_configuration_on_meta_server(proposal.type, proposal.node, proposal.config);
 }
 
 void replica::add_potential_secondary(configuration_update_request& proposal)
@@ -221,7 +243,7 @@ void replica::remove(configuration_update_request& proposal)
     dassert (proposal.config.primary == _primary_states.membership.primary, "");
     dassert (proposal.config.secondaries == _primary_states.membership.secondaries, "");
 
-    auto st = _primary_states.GetNodeStatus(proposal.node);
+    auto st = _primary_states.get_node_status(proposal.node);
 
     switch (st)
     {
@@ -260,7 +282,7 @@ void replica::update_configuration_on_meta_server(config_type type, const end_po
 {
     newConfig.last_committed_decree = last_committed_decree();
 
-    if (type != CT_ASSIGN_PRIMARY)
+    if (type != CT_ASSIGN_PRIMARY && type != CT_UPGRADE_TO_PRIMARY)
     {
         dassert (status() == PS_PRIMARY, "");
         dassert (newConfig.ballot == _primary_states.membership.ballot, "");
@@ -357,7 +379,7 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, messa
     }        
     
     // post-update work items?
-    if (resp.err == ERR_SUCCESS)
+    if (resp.err == ERR_OK)
     {        
         dassert (req->config.gpid == resp.config.gpid, "");
         dassert (req->config.app_type == resp.config.app_type, "");
@@ -365,7 +387,10 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, messa
         dassert (req->config.secondaries == resp.config.secondaries, "");
 
         switch (req->type)
-        {
+        {        
+        case CT_UPGRADE_TO_PRIMARY:
+            _primary_states.last_prepare_decree_on_new_primary = _prepare_list->max_decree();
+            break;
         case CT_ASSIGN_PRIMARY:
         case CT_DOWNGRADE_TO_SECONDARY:
         case CT_DOWNGRADE_TO_INACTIVE:
@@ -443,7 +468,7 @@ bool replica::update_local_configuration(const replica_configuration& config, bo
 
     // skip unncessary configuration change
     if (old_status == config.status && old_ballot == config.ballot)
-        return false;
+        return true;
 
     // skip invalid change
     switch (old_status)
@@ -527,7 +552,7 @@ bool replica::update_local_configuration(const replica_configuration& config, bo
         switch (config.status)
         {
         case PS_PRIMARY:
-            init_group_check();
+            init_group_check();            
             replay_prepare_list();
             break;
         case PS_SECONDARY:
@@ -637,14 +662,14 @@ bool replica::update_local_configuration(const replica_configuration& config, bo
         {
             ddebug("%s: being close ...", name());
             _stub->begin_close_replica(this);
-            return true;
+            return false;
         }
     }
     else
     {
         _stub->notify_replica_state_update(config, false);
     }
-    return false;
+    return true;
 }
 
 bool replica::update_local_configuration_with_no_ballot_change(partition_status s)
@@ -661,19 +686,22 @@ void replica::on_config_sync(const partition_configuration& config)
 {
     ddebug( "%s: configuration sync", name());
 
-    // no update during reconfiguration
-    if (nullptr != _primary_states.reconfiguration_task)
-        return;
-
     // no outdated update
     if (config.ballot < get_ballot())
         return;
 
-    update_configuration(config);
-
-    if (status() == PS_INACTIVE && !_inactive_is_transient)
+    if (status() == PS_PRIMARY || nullptr != _primary_states.reconfiguration_task)
     {
-        _stub->remove_replica_on_meta_server(config);
+        // nothing to do as pirmary always holds the truth
+    }
+    else
+    {
+        update_configuration(config);
+
+        if (config.primary == primary_address() && status() == PS_INACTIVE && !_inactive_is_transient)
+        {
+            _stub->remove_replica_on_meta_server(config);
+        }
     }
 }
 
@@ -705,6 +733,7 @@ void replica::replay_prepare_list()
         }
         else
         {
+            mu->rpc_code = RPC_REPLICATION_WRITE_EMPTY;
             ddebug(
                 "%s: emit empty mutation %s when replay prepare list",
                 name(),

@@ -27,6 +27,9 @@
 # include <dsn/internal/logging.h>
 # include "shared_io_service.h"
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "net.boost.asio"
 
 namespace dsn {
@@ -82,11 +85,6 @@ namespace dsn {
                         );
                 }
             }
-        }
-
-        void net_io::on_failure()
-        {
-            close();
         }
 
         void net_io::close()

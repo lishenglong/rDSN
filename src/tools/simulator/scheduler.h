@@ -35,15 +35,15 @@ class event_wheel
 public:
     ~event_wheel() { clear(); }
 
-    void add_event(uint64_t ts, task_ptr& task);
-    std::vector<task_ptr>* pop_next_events(__out_param uint64_t& ts);
+    void add_event(uint64_t ts, task* t);
+    std::vector<task*>* pop_next_events(__out_param uint64_t& ts);
     void clear();
-    bool has_more_events() const {  utils::auto_lock l(_lock); return _events.size() > 0; }
+    bool has_more_events() const {  utils::auto_lock<::dsn::utils::ex_lock> l(_lock); return _events.size() > 0; }
 
 private:
-    typedef std::map<uint64_t, std::vector<task_ptr>*>  Events;
+    typedef std::map<uint64_t, std::vector<task*>*>  Events;
     Events _events;
-    mutable std::recursive_mutex  _lock;
+    mutable ::dsn::utils::ex_lock _lock;
 };
 
 struct sim_worker_state
@@ -69,10 +69,10 @@ public:
     ~scheduler(void);
 
     void start() { _running = true; }    
-    uint64_t now_ns() const { utils::auto_lock l(_lock); return _time_ns; }
+    uint64_t now_ns() const { utils::auto_lock<::dsn::utils::ex_lock> l(_lock); return _time_ns; }
 
     void reset();
-    void add_task(task_ptr& task, task_queue* q);
+    void add_task(task* task, task_queue* q);
     void wait_schedule(bool in_continue, bool is_continue_ready = false);
     void add_checker(checker* chker);
     
@@ -92,7 +92,7 @@ public:
 
 private:
     event_wheel                    _wheel;
-    mutable std::recursive_mutex   _lock;
+    mutable ::dsn::utils::ex_lock  _lock;
     uint64_t                       _time_ns;
     bool                           _running;
     std::vector<sim_worker_state*> _threads;

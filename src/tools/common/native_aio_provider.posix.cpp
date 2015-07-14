@@ -24,14 +24,17 @@
  * THE SOFTWARE.
  */
 
-# include "native_aio_provider.posix.h"
+# ifndef _WIN32
 
-# if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+# include "native_aio_provider.posix.h"
 
 # include <aio.h>
 # include <fcntl.h>
 # include <cstdlib>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "aio.provider.posix"
 
 namespace dsn {
@@ -55,7 +58,7 @@ namespace dsn {
         {
             // TODO: handle failure
             ::close(static_cast<int>(hFile));
-            return ERR_SUCCESS;
+            return ERR_OK;
         }
 
         struct posix_disk_aio_context : public disk_aio
@@ -98,11 +101,11 @@ namespace dsn {
                 if (!ctx->evt)
                 {
                     aio_task_ptr aio(ctx->tsk);
-                    ctx->this_->complete_io(aio, err == 0 ? ERR_SUCCESS : ERR_FILE_OPERATION_FAILED, bytes);
+                    ctx->this_->complete_io(aio, err == 0 ? ERR_OK : ERR_FILE_OPERATION_FAILED, bytes);
                 }
                 else
                 {
-                    ctx->err = err == 0 ? ERR_SUCCESS : ERR_FILE_OPERATION_FAILED;
+                    ctx->err = err == 0 ? ERR_OK : ERR_FILE_OPERATION_FAILED;
                     ctx->bytes = bytes;
                     ctx->evt->notify();
                 }
@@ -129,7 +132,7 @@ namespace dsn {
             if (!async)
             {
                 aio->evt = new utils::notify_event();
-                aio->err = ERR_SUCCESS;
+                aio->err = ERR_OK;
                 aio->bytes = 0;
             }
 
@@ -146,9 +149,9 @@ namespace dsn {
                 break;
             }
 
-            if (r < 0)
+            if (r != 0)
             {
-                derror("file op faile, err = %d", errno);
+                derror("file op failed, err = %d. On FreeBSD, you may need to load aio kernel module by running 'sudo kldload aio'.", errno);
 
                 if (async)
                 {
@@ -180,4 +183,5 @@ namespace dsn {
 
     }
 } // end namespace dsn::tools
+
 #endif

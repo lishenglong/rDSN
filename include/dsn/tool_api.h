@@ -37,9 +37,11 @@
 # include <dsn/internal/zlocks.h>
 # include <dsn/internal/message_parser.h>
 # include <dsn/internal/logging_provider.h>
+# include <dsn/internal/memory_provider.h>
 # include <dsn/internal/perf_counters.h>
 # include <dsn/internal/logging.h>
 # include <dsn/internal/configuration.h>
+# include <dsn/internal/memory.tools.h>
 
 namespace dsn { namespace tools {
     
@@ -98,7 +100,7 @@ typedef task_queue*      (*task_queue_factory)(task_worker_pool*, int, task_queu
 typedef task_worker*     (*task_worker_factory)(task_worker_pool*, task_queue*, int, task_worker*);
 typedef admission_controller* (*admission_controller_factory)(task_queue*, const char*);
 typedef lock_provider*   (*lock_factory)(dsn::service::zlock *, lock_provider*);
-typedef rwlock_provider* (*read_write_lock_factory)(dsn::service::zrwlock *, rwlock_provider*);
+typedef rwlock_nr_provider* (*read_write_lock_factory)(dsn::service::zrwlock_nr *, rwlock_nr_provider*);
 typedef semaphore_provider* (*semaphore_factory)(dsn::service::zsemaphore *, int, semaphore_provider*);
 typedef network*         (*network_factory)(rpc_engine*, network*);
 typedef aio_provider*    (*aio_factory)(disk_engine*, aio_provider*);
@@ -107,7 +109,8 @@ typedef nfs_node*        (*nfs_factory)(service_node*);
 typedef message_parser*  (*message_parser_factory)(int);
 
 typedef perf_counter*    (*perf_counter_factory)(const char *, const char *, perf_counter_type);
-typedef logging_provider* (*logging_factory)(const char*);
+typedef logging_provider* (*logging_factory)();
+typedef memory_provider* (*memory_factory)();
 typedef toollet*         (*toollet_factory)(const char*);
 typedef tool_app*        (*tool_app_factory)(const char*);
 
@@ -124,6 +127,7 @@ namespace internal_use_only
     bool register_component_provider(const char* name, env_factory f, int type);
     bool register_component_provider(const char* name, perf_counter_factory f, int type);
     bool register_component_provider(const char* name, logging_factory f, int type);
+    bool register_component_provider(const char* name, memory_factory f, int type);
     bool register_component_provider(const char* name, nfs_factory f, int type);
     bool register_component_provider(const char* name, message_parser_factory f, int type);
     
@@ -149,5 +153,5 @@ configuration_ptr config();
 // --------- inline implementation -----------------------------
 
 
-}} // end namespace dsn::tool_api
+}} // end namespace dsn::tools
 

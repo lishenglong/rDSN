@@ -3,6 +3,13 @@ require_once($argv[1]); // type.php
 require_once($argv[2]); // program.php
 $file_prefix = $argv[3];
 ?>
+[apps.default]
+run = true
+count = 1
+;network.client.RPC_CHANNEL_TCP = dsn::tools::sim_network_provider, 65536
+;network.client.RPC_CHANNEL_UDP = dsn::tools::sim_network_provider, 65536
+;network.server.0.RPC_CHANNEL_TCP = NET_HDR_DSN, dsn::tools::sim_network_provider, 65536
+
 [apps.meta]
 name = meta
 type = meta
@@ -10,7 +17,8 @@ arguments =
 ports = 34601
 run = true
 count = 1 
-    
+pools = THREAD_POOL_DEFAULT,THREAD_POOL_META_SERVER,THREAD_POOL_FD
+
 [apps.replica]
 name = replica
 type = replica
@@ -18,6 +26,7 @@ arguments =
 ports = 34801
 run = true
 count = 3
+pools = THREAD_POOL_DEFAULT,THREAD_POOL_REPLICATION_LONG,THREAD_POOL_REPLICATION,THREAD_POOL_FD,THREAD_POOL_LOCAL_APP
 
 [apps.client]
 name = client
@@ -25,6 +34,7 @@ type = client
 arguments = <?=$_PROG->name?>.instance0
 run = true
 count = 2 
+pools = THREAD_POOL_DEFAULT
 
 <?php foreach ($_PROG->services as $svc) { ?>
 [apps.client.<?=$svc->name?>.perf.test]
@@ -33,6 +43,7 @@ type = client.<?=$svc->name?>.perf.test
 arguments = <?=$_PROG->name?>.instance0
 count = 1
 run = false
+pools = THREAD_POOL_DEFAULT
 <?php } ?>
 
 [core]
@@ -51,13 +62,6 @@ random_seed = 0
 [network]
 ; how many network threads for network library(used by asio)
 io_service_worker_count = 2
-
-[network.34601]
-; channel = network_header_format, network_provider_name, buffer_block_size
-;RPC_CHANNEL_TCP = NET_HDR_DSN, dsn::tools::asio_network_provider, 65536
-
-;RPC_CHANNEL_TCP = NET_HDR_THRIFT, dsn::tools::asio_network_provider, 65536
-
 
 ; specification for each thread pool
 [threadpool.default]
@@ -84,6 +88,7 @@ rpc_call_channel = RPC_CHANNEL_TCP
 fast_execution_in_network_thread = false
 rpc_call_header_format_name = dsn
 rpc_timeout_milliseconds = 5000
+perf_test_rounds = 10000
 
 [task.LPC_AIO_IMMEDIATE_CALLBACK]
 is_trace = false

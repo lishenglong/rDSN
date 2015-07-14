@@ -33,13 +33,13 @@ namespace dsn {
 class logging_provider
 {
 public:
-    template <typename T> static logging_provider* create(const char *parameter)
+    template <typename T> static logging_provider* create()
     {
-        return new T(parameter);
+        return new T();
     }
 
 public:
-    logging_provider(const char *parameter) {}
+    logging_provider() {}
 
     virtual ~logging_provider(void) { }
     

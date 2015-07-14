@@ -48,21 +48,37 @@ namespace dsn {
                     std::vector<perf_test_suite> suits;
 
                     s.name = "simple_kv.write";
-                    s.start = [this](){this->send_one_write(); };
+                    s.config_section = "task.RPC_SIMPLE_KV_SIMPLE_KV_WRITE";
+                    s.send_one = [this](){this->send_one_write(); };
+                    s.cases.clear();
                     load_suite_config(s);
                     suits.push_back(s);
 
                     s.name = "simple_kv.append";
-                    s.start = [this](){this->send_one_append(); };
+                    s.config_section = "task.RPC_SIMPLE_KV_SIMPLE_KV_APPEND";
+                    s.send_one = [this](){this->send_one_append(); };
+                    s.cases.clear();
                     load_suite_config(s);
                     suits.push_back(s);
 
                     s.name = "simple_kv.read";
-                    s.start = [this](){this->send_one_read(); };
+                    s.config_section = "task.RPC_SIMPLE_KV_SIMPLE_KV_READ";
+                    s.send_one = [this](){this->send_one_read(); };
+                    s.cases.clear();
                     load_suite_config(s);
                     suits.push_back(s);
 
                     start(suits);
+                }
+
+                virtual int get_partition_index(const std::string& key) 
+                {
+                    return (int)env::random32(0, 7);
+                }
+
+                virtual int get_partition_index(const ::dsn::replication::application::kv_pair& key)
+                {
+                    return (int)env::random32(0, 7);
                 }
                                 
                 void send_one_read()

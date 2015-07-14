@@ -33,6 +33,9 @@
 # include "task_engine.sim.h"
 # include <dsn/internal/logging.h>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "tools.simulator"
 
 namespace dsn { namespace tools {
@@ -62,11 +65,18 @@ void simulator::install(service_spec& spec)
     network_client_config cs;
     cs.factory_name = "dsn::tools::sim_network_provider";
     cs.message_buffer_block_size = 1024 * 64;
-    if (spec.network_default_client_cfs.find(RPC_CHANNEL_TCP) == spec.network_default_client_cfs.end())
-        spec.network_default_client_cfs[RPC_CHANNEL_TCP] = cs;
+    spec.network_default_client_cfs[RPC_CHANNEL_TCP] = cs;
+    spec.network_default_client_cfs[RPC_CHANNEL_UDP] = cs;
 
-    if (spec.network_default_client_cfs.find(RPC_CHANNEL_UDP) == spec.network_default_client_cfs.end())
-        spec.network_default_client_cfs[RPC_CHANNEL_UDP] = cs;
+    network_server_config cs2;
+    cs2.port = 0;    
+    cs2.hdr_format = NET_HDR_DSN;
+    cs2.factory_name = "dsn::tools::sim_network_provider";
+    cs2.message_buffer_block_size = 1024 * 64;
+    cs2.channel = RPC_CHANNEL_TCP;
+    spec.network_default_server_cfs[cs2] = cs2;
+    cs2.channel = RPC_CHANNEL_UDP;
+    spec.network_default_server_cfs[cs2] = cs2;
 
     if (spec.perf_counter_factory_name == "")
         spec.perf_counter_factory_name = "dsn::tools::simple_perf_counter";
@@ -74,11 +84,17 @@ void simulator::install(service_spec& spec)
     if (spec.logging_factory_name == "")
         spec.logging_factory_name = "dsn::tools::simple_logger";
 
+    if (spec.memory_factory_name == "")
+        spec.memory_factory_name = "dsn::default_memory_provider";
+
+    if (spec.tools_memory_factory_name == "")
+        spec.tools_memory_factory_name = "dsn::default_memory_provider";
+
     if (spec.lock_factory_name == "")
         spec.lock_factory_name = ("dsn::tools::std_lock_provider");
 
-    if (spec.rwlock_factory_name == "")
-        spec.rwlock_factory_name = ("dsn::tools::std_rwlock_provider");
+    if (spec.rwlock_nr_factory_name == "")
+        spec.rwlock_nr_factory_name = ("dsn::tools::std_rwlock_nr_provider");
 
     if (spec.semaphore_factory_name == "")
         spec.semaphore_factory_name = ("dsn::tools::sim_semaphore_provider");

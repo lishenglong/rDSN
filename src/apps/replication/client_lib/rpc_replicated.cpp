@@ -79,7 +79,7 @@ namespace dsn {
                         else if (header.err == ERR_TALK_TO_OTHERS)
                         {
                             next_server = header.primary_address;
-                            err = ERR_SUCCESS;
+                            err = ERR_OK;
                         }
                         else
                         {
@@ -148,11 +148,13 @@ namespace dsn {
                     reply_hash
                     );
 
-                return rpc::call(
+                rpc::call(
                     first,
                     request,
                     ps->response_task
                     );
+
+                return ps->response_task;
             }
         }
     }

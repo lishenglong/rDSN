@@ -24,7 +24,6 @@
  * THE SOFTWARE.
  */
 # include "simple_logger.h"
-# include <boost/lexical_cast.hpp>
 # include <boost/thread.hpp>
 # include <boost/filesystem.hpp>
 
@@ -35,12 +34,14 @@ namespace dsn {
         {
             uint64_t ts = 0;
             if (::dsn::service::system::is_ready())
-                ts = ::dsn::service::env::now_ms();
+                ts = ::dsn::service::env::now_ns();
 
             char str[24];
-            ::dsn::utils::time_ms_to_string(ts, str);
+            ::dsn::utils::time_ms_to_string(ts/1000000, str);
 
-            fprintf(fp, "%s(%llu) ", str, ts);
+            int tid = ::dsn::utils::get_current_tid(); 
+
+            fprintf(fp, "%s(%llu %05d)", str, static_cast<long long unsigned int>(ts), tid);
 
             task* t = task::get_current_task();
             if (t)
@@ -56,23 +57,20 @@ namespace dsn {
                 }
                 else
                 {
-                    std::string tid = boost::lexical_cast<std::string>(boost::this_thread::get_id());
-
-                    fprintf(fp, "%6s.%7s.%s.%016llx: ",
+                    fprintf(fp, "%6s.%7s.%05d.%016llx: ",
                         t->node_name(),
                         "io-thrd",
-                        tid.c_str(),
+                        tid,
                         static_cast<long long unsigned int>(t->id())
                         );
                 }
             }
             else
             {
-                std::string tid = boost::lexical_cast<std::string>(boost::this_thread::get_id());
-                fprintf(fp, "%6s.%7s.%s: ",
+                fprintf(fp, "%6s.%7s.%05d: ",
                     "system",
                     "io-thrd",
-                    tid.c_str()
+                    tid
                     );
             }
         }
@@ -86,15 +84,14 @@ namespace dsn {
             va_list args
             )
         {
-            utils::auto_lock l(_lock);
+            utils::auto_lock<::dsn::utils::ex_lock_nr> l(_lock);
 
             print_header(stdout);
             vprintf(fmt, args);
             printf("\n");
         }
 
-        simple_logger::simple_logger(const char *parameter) 
-            : logging_provider(parameter) 
+        simple_logger::simple_logger() 
         {
             _start_index = 0;
             _index = 0;
@@ -171,7 +168,7 @@ namespace dsn {
                 va_copy(args2, args);
             }
 
-            utils::auto_lock l(_lock);
+            utils::auto_lock<::dsn::utils::ex_lock_nr> l(_lock);
          
             print_header(_log);
             fprintf(_log, "%s, ", title);

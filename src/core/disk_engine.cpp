@@ -30,7 +30,10 @@
 # include <dsn/internal/utils.h>
 # include <dsn/service_api.h>
 
-#define __TITLE__ "disk_engine"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "disk_engine"
 
 using namespace dsn::utils;
 
@@ -51,7 +54,7 @@ disk_engine::~disk_engine()
 
 void disk_engine::start(aio_provider* provider)
 {
-    auto_lock l(_lock);
+    auto_lock<::dsn::utils::ex_lock_nr> l(_lock);
     if (_is_running)
         return;  
 
@@ -87,7 +90,7 @@ void disk_engine::start_io(aio_task_ptr& aio_tsk)
     aio->engine = this;
     
     {
-        auto_lock l(_lock);
+        auto_lock<::dsn::utils::ex_lock_nr> l(_lock);
         if (!_is_running)
         {
             aio_tsk->enqueue(ERR_SERVICE_NOT_FOUND, 0, _node);
@@ -114,7 +117,7 @@ void disk_engine::complete_io(aio_task_ptr& aio, error_code err, uint32_t bytes,
 {
     // TODO: failure injection, profiling, throttling
 
-    if (err != ERR_SUCCESS)
+    if (err != ERR_OK)
     {
         dwarn(
                     "disk operation failure with code %s, err = 0x%x, aio task id = %llx",
@@ -125,7 +128,7 @@ void disk_engine::complete_io(aio_task_ptr& aio, error_code err, uint32_t bytes,
     }
     
     {
-        auto_lock l(_lock);
+        auto_lock<::dsn::utils::ex_lock_nr> l(_lock);
         _request_count--;
     }
     

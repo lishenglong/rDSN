@@ -31,6 +31,7 @@
 # include <dsn/internal/error_code.h>
 # include <dsn/internal/rpc_message.h>
 # include <dsn/internal/end_point.h>
+# include <dsn/internal/link.h>
 
 namespace dsn {
 
@@ -39,8 +40,19 @@ namespace dsn {
 class task_worker;
 class task_worker_pool;
 class service_node;
+class task;
 
-class task : public ref_object, public extensible_object<task, 4>
+struct __tls_task_info__
+{
+    uint32_t     magic;
+    task         *current_task;
+    task_worker  *worker;
+    int           worker_index;
+};
+
+extern __thread struct __tls_task_info__ tls_task_info;
+
+class task : public ref_object, public extensible_object<task, 4>, public ::dsn::tools::memory::tallocator_object
 {
 public:
     task(task_code code, int hash = 0, service_node* node = nullptr);
@@ -49,8 +61,8 @@ public:
     virtual void exec() = 0;
 
     void                    exec_internal();    
-    bool                    cancel(bool wait_until_finished, /*out*/ bool* cancel_success = nullptr); // return whether finished
-    bool                    wait(int timeout_milliseconds = TIME_MS_MAX);
+    bool                    cancel(bool wait_until_finished, /*out*/ bool* finished = nullptr); // return whether *this* cancel success
+    bool                    wait(int timeout_milliseconds = TIME_MS_MAX, bool on_cancel = false);
     virtual void            enqueue();
     void                    set_error_code(error_code err) { _error = err; }
     void                    set_delay(int delay_milliseconds = 0) { _delay_milliseconds = delay_milliseconds; }
@@ -70,6 +82,7 @@ public:
     static task*            get_current_task();
     static uint64_t         get_current_task_id();
     static task_worker*     get_current_worker();
+    static int              get_current_worker_index();
     static void             set_current_worker(task_worker* worker);
 
 protected:
@@ -81,6 +94,8 @@ protected:
     bool                   _is_null;
 
 private:
+    task(const task&);
+
     uint64_t               _task_id; 
     std::atomic<void*>     _wait_event;
     int                    _hash;
@@ -89,6 +104,10 @@ private:
     bool                   _wait_for_cancel;
     task_spec              *_spec;
     service_node           *_node;
+
+public:
+    // used by task queue only
+    dlink                  _task_queue_dl;
 };
 
 DEFINE_REF_OBJECT(task)
@@ -129,7 +148,7 @@ typedef ::boost::intrusive_ptr<rpc_request_task> rpc_request_task_ptr;
 class rpc_server_handler
 {
 public:
-    virtual rpc_request_task_ptr new_request_task(message_ptr& request, service_node* node) = 0;
+    virtual rpc_request_task* new_request_task(message_ptr& request, service_node* node) = 0;
     virtual ~rpc_server_handler(){}
 };
 
@@ -231,5 +250,40 @@ public:
 };
 
 typedef ::boost::intrusive_ptr<aio_task> aio_task_ptr;
+
+
+// ------------------------ inline implementations --------------------
+__inline /*static*/ task* task::get_current_task()
+{
+    if (tls_task_info.magic == 0xdeadbeef)
+        return tls_task_info.current_task;
+    else
+        return nullptr;
+}
+
+__inline /*static*/ uint64_t task::get_current_task_id()
+{
+    if (tls_task_info.magic == 0xdeadbeef)
+        return tls_task_info.current_task ? tls_task_info.current_task->id() : 0;
+    else
+        return 0;
+}
+
+
+__inline /*static*/ task_worker* task::get_current_worker()
+{
+    if (tls_task_info.magic == 0xdeadbeef)
+        return tls_task_info.worker;
+    else
+        return nullptr;
+}
+
+__inline /*static*/ int task::get_current_worker_index()
+{
+    if (tls_task_info.magic == 0xdeadbeef)
+        return tls_task_info.worker_index;
+    else
+        return -1;
+}
 
 } // end namespace

@@ -27,6 +27,9 @@
 # include "simple_task_queue.h"
 
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "task.queue.simple"
 
 namespace dsn {
@@ -36,10 +39,12 @@ namespace dsn {
         {
         }
 
-        void simple_task_queue::enqueue(task_ptr& task)
+        void simple_task_queue::enqueue(task* task)
         {
             if (task->delay_milliseconds() == 0)
+            {
                 _samples.enqueue(task, task->spec().priority);
+            }   
             else
             {
                 std::shared_ptr<boost::asio::deadline_timer> timer(new boost::asio::deadline_timer(shared_io_service::instance().ios));
@@ -57,14 +62,19 @@ namespace dsn {
                         dfatal("delayed execution failed for task %s, err = %u",
                             task->spec().name, ec.value());
                     }
+
+                    // to consume the added ref count by another task::enqueue
+                    task->release_ref();
                 });
             }
         }
 
-        task_ptr simple_task_queue::dequeue()
+        task* simple_task_queue::dequeue()
         {
-            int c = 0;
-            return _samples.dequeue(c);
+            long c = 0;
+            auto t = _samples.dequeue(c);
+            dassert(t != nullptr, "dequeue does not return empty tasks");
+            return t;
         }
 
         int      simple_task_queue::count() const

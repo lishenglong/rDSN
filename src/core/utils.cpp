@@ -27,11 +27,41 @@
 # include <dsn/internal/env_provider.h>
 # include <random>
 # include <dsn/internal/singleton.h>
+# include <sys/types.h>
 
+# if defined(__linux__)
+# include <sys/syscall.h>
+# elif defined(__FreeBSD__)
+# include <sys/thr.h>
+# elif defined(__APPLE__)
+# include <pthread.h>
+# endif
+
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "dsn.utils"
 
 namespace dsn {
     namespace utils {
+
+        int get_current_tid()
+        {
+# if defined(_WIN32)
+            return static_cast<int>(::GetCurrentThreadId());
+# elif defined(__linux__)
+            //return static_cast<int>(gettid());
+            return static_cast<int>(syscall(SYS_gettid));
+# elif defined(__FreeBSD__)
+            long lwpid;
+            thr_self(&lwpid);
+            return static_cast<int>(lwpid);
+# elif defined(__APPLE__)
+            return static_cast<int>(pthread_mach_thread_np(pthread_self()));
+# else
+# error not implemented yet
+# endif 
+        }
 
         std::string get_last_component(const std::string& input, char splitters[])
         {
@@ -348,7 +378,31 @@ namespace  dsn
 
         ++_cur_pos;
     }
-        
+
+    void binary_writer::sanity_check()
+    {
+        dassert(_cur_pos < static_cast<int>(_buffers.size()), 
+            "current position must be within the buffer array: %d vs %d", 
+            static_cast<int>(_cur_pos), 
+            static_cast<int>(_buffers.size())
+            );
+
+        dassert(_data.size() == _buffers.size(),
+            "data and buffer array must be of the same size: %d vs %d",
+            static_cast<int>(_data.size()),
+            static_cast<int>(_buffers.size())
+            );
+
+        for (size_t i = 0; i < _data.size(); i++)
+        {
+            dassert(_data[i].length() <= _buffers[i].length(),
+                "data size must not be greater than the buffer size: %d vs %d",
+                static_cast<int>(_data[i].length()),
+                static_cast<int>(_buffers[i].length())
+                );
+        }
+    }
+
     uint16_t binary_writer::write_placeholder()
     {
         if (_cur_is_placeholder)
@@ -356,6 +410,7 @@ namespace  dsn
             create_buffer_and_writer();
         }
         _cur_is_placeholder = true;
+        dassert(_cur_pos <= 0x0000ffff, "placeholder do not support index exceed uint16.max right now: %d", _cur_pos);
         return (uint16_t)_cur_pos;
     }
 
@@ -380,9 +435,82 @@ namespace  dsn
         }
     }
 
+    void binary_writer::write_empty(int sz, uint16_t pos /*= 0xffff*/)
+    {
+        int sz0 = sz;
+# ifdef _DEBUG
+        sanity_check();
+# endif
+        if (pos != 0xffff)
+        {
+            int rem_size = _buffers[pos].length() - _data[pos].length();
+            if (sz > rem_size)
+            {
+                int allocSize = _data[pos].length() + sz;
+                std::shared_ptr<char> ptr((char*)malloc(allocSize));
+                blob bb(ptr, allocSize);
+
+                memcpy((void*)bb.data(), (const void*)_data[pos].data(), (size_t)_data[pos].length());
+
+                _buffers[pos] = bb;
+                _data[pos] = bb;
+            }
+            else
+            {
+                _data[pos]._length += sz;
+            }
+        }
+        else
+        {
+            if (_cur_is_placeholder)
+            {
+                create_buffer_and_writer();
+                _cur_is_placeholder = false;
+            }
+
+            int pos2 = _cur_pos;
+
+            int rem_size = _buffers[pos2].length() - _data[pos2].length();
+            if (rem_size >= sz)
+            {
+                _data[pos2]._length += sz;
+            }
+            else
+            {
+                _data[pos2]._length += rem_size;
+
+                sz -= rem_size;
+
+                int allocSize = _reserved_size_per_buffer;
+                if (sz > allocSize)
+                    allocSize = sz;
+
+                std::shared_ptr<char> ptr((char*)malloc(allocSize));
+                blob bb(ptr, allocSize);
+                _buffers.push_back(bb);
+
+                bb._length = 0;
+                _data.push_back(bb);
+
+                pos2 = (++_cur_pos);
+
+                _data[pos2]._length += sz;
+            }
+        }
+# ifdef _DEBUG
+        sanity_check();
+# endif
+
+        _total_size += sz0;
+    }
+
     void binary_writer::write(const char* buffer, int sz, uint16_t pos /*= 0xffff*/)
     {
         int sz0 = sz;
+
+# ifdef _DEBUG
+        sanity_check();
+# endif
 
         if (pos != 0xffff)
         {
@@ -413,21 +541,28 @@ namespace  dsn
                 _cur_is_placeholder = false;
             }
 
-            pos = (uint16_t)_cur_pos;
+            int pos2 = _cur_pos;
 
-            int rem_size = _buffers[pos].length() - _data[pos].length();
+            int rem_size = _buffers[pos2].length() - _data[pos2].length();
             if (rem_size >= sz)
             {
-                memcpy((void*)(_data[pos].data() + _data[pos].length()), buffer, (size_t)sz);
-                _data[pos]._length += sz;
+                memcpy((void*)(_data[pos2].data() + _data[pos2].length()), buffer, (size_t)sz);
+                _data[pos2]._length += sz;
             }
             else
             {
-                memcpy((void*)(_data[pos].data() + _data[pos].length()), buffer, (size_t)rem_size);
-                _data[pos]._length += rem_size;
+                if (rem_size > 0)
+                {
+                    memcpy((void*)(_data[pos2].data() + _data[pos2].length()), buffer, (size_t)rem_size);
+                    _data[pos2]._length += rem_size;
 
-                sz -= rem_size;
-                buffer += rem_size;
+                    sz -= rem_size;
+                    buffer += rem_size;
+                }
+                else
+                {
+                    dbg_dassert(rem_size == 0, "remaining size must be zero in this case: %d", rem_size);
+                }
 
                 int allocSize = _reserved_size_per_buffer;
                 if (sz > allocSize)
@@ -440,12 +575,16 @@ namespace  dsn
                 bb._length = 0;
                 _data.push_back(bb);
 
-                pos = (uint16_t)(++_cur_pos);
+                pos2 = (++_cur_pos);
 
-                memcpy((void*)(_data[pos].data() + _data[pos].length()), buffer, (size_t)sz);
-                _data[pos]._length += sz;
+                memcpy((void*)(_data[pos2].data() + _data[pos2].length()), buffer, (size_t)sz);
+                _data[pos2]._length += sz;
             }
         }
+
+# ifdef _DEBUG
+        sanity_check();
+# endif
 
         _total_size += sz0;
     }

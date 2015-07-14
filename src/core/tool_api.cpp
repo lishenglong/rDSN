@@ -49,11 +49,11 @@ namespace dsn {
                 if (_app->node()->nfs())
                 {
                     err = _app->node()->nfs()->start();
-                    dassert(err == ERR_SUCCESS, "start nfs failed, err = %s", err.to_string());
+                    dassert(err == ERR_OK, "start nfs failed, err = %s", err.to_string());
                 }
 
                 err = _app->start(_app->arg_count(), _app->args());
-                dassert(err == ERR_SUCCESS, "start app failed, err = %s", err.to_string());
+                dassert(err == ERR_OK, "start app failed, err = %s", err.to_string());
                 _app->_started = true;
             }
             else
@@ -156,7 +156,7 @@ namespace dsn {
 
             bool register_component_provider(const char* name, read_write_lock_factory f, int type)
             {
-                return dsn::utils::factory_store<rwlock_provider>::register_factory(name, f, type);
+                return dsn::utils::factory_store<rwlock_nr_provider>::register_factory(name, f, type);
             }
 
             bool register_component_provider(const char* name, semaphore_factory f, int type)
@@ -192,6 +192,11 @@ namespace dsn {
             bool register_component_provider(const char* name, logging_factory f, int type)
             {
                 return dsn::utils::factory_store<logging_provider>::register_factory(name, f, type);
+            }
+
+            bool register_component_provider(const char* name, memory_factory f, int type)
+            {
+                return dsn::utils::factory_store<memory_provider>::register_factory(name, f, type);
             }
 
             bool register_component_provider(const char* name, message_parser_factory f, int type)

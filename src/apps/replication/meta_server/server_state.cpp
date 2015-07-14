@@ -27,6 +27,9 @@
 # include <sstream>
 # include <dsn/internal/serialization.h>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "meta.server.state"
 
 void marshall(binary_writer& writer, const app_state& val, uint16_t pos = 0xffff)
@@ -236,14 +239,6 @@ void server_state::set_node_state(const node_states& nodes, __out_param machine_
     }
 }
 
-// used by unfree for the initial stage where machine states are all considered ALIVE but freeze = true
-void server_state::benign_unfree()
-{
-    zauto_write_lock l(_lock);
-    _freeze = (_node_live_count * 100 < _node_live_percentage_threshold_for_update * static_cast<int>(_nodes.size()));
-    dinfo("live replica server # is %d, freeze = %s", _node_live_count, _freeze ? "true" : "false");
-}
-
 bool server_state::get_meta_server_primary(__out_param end_point& node)
 {
     zauto_read_lock l(_meta_lock);
@@ -318,7 +313,7 @@ void server_state::query_configuration_by_node(configuration_query_by_node_reque
     }
     else
     {
-        response.err = ERR_SUCCESS;
+        response.err = ERR_OK;
 
         for (auto& p : it->second.partitions)
         {
@@ -342,7 +337,9 @@ void server_state::query_configuration_by_index(configuration_query_by_index_req
         app_state& kv = _apps[i];
         if (kv.app_name == request.app_name)
         {
-            response.err = ERR_SUCCESS;
+            response.err = ERR_OK;
+            response.app_id = i + 1;
+            response.partition_count = kv.partition_count;
             app_state& app = kv;
             for (auto& idx : request.partition_indices)
             {
@@ -371,7 +368,7 @@ void server_state::update_configuration_internal(configuration_update_request& r
     partition_configuration& old = app.partitions[request.config.gpid.pidx];
     if (old.ballot + 1 == request.config.ballot)
     {
-        response.err = ERR_SUCCESS;
+        response.err = ERR_OK;
 
         // update to new config
         old = request.config;
@@ -385,6 +382,7 @@ void server_state::update_configuration_internal(configuration_update_request& r
         switch (request.type)
         {
         case CT_ASSIGN_PRIMARY:
+        case CT_UPGRADE_TO_PRIMARY:
             node.partitions.insert(old.gpid);
             node.primaries.insert(old.gpid);
             type = "assign primary";

@@ -29,10 +29,9 @@
 # include <dsn/internal/serialization.h>
 # include <iostream>
 
-DEFINE_THREAD_POOL_CODE(THREAD_POOL_TEST)
-DEFINE_TASK_CODE(LPC_ECHO_TIMER, ::dsn::TASK_PRIORITY_HIGH, THREAD_POOL_TEST)
-DEFINE_TASK_CODE_RPC(RPC_ECHO, ::dsn::TASK_PRIORITY_HIGH, THREAD_POOL_TEST)
-DEFINE_TASK_CODE_RPC(RPC_ECHO2, ::dsn::TASK_PRIORITY_HIGH, THREAD_POOL_TEST)
+DEFINE_TASK_CODE(LPC_ECHO_TIMER, ::dsn::TASK_PRIORITY_HIGH, ::dsn::THREAD_POOL_DEFAULT)
+DEFINE_TASK_CODE_RPC(RPC_ECHO, ::dsn::TASK_PRIORITY_HIGH, ::dsn::THREAD_POOL_DEFAULT)
+DEFINE_TASK_CODE_RPC(RPC_ECHO2, ::dsn::TASK_PRIORITY_HIGH, ::dsn::THREAD_POOL_DEFAULT)
 
 using namespace dsn;
 using namespace dsn::service;
@@ -69,7 +68,7 @@ public:
     {
         register_rpc_handler(RPC_ECHO, "RPC_ECHO", &echo_server::on_echo);
         register_async_rpc_handler(RPC_ECHO2, "RPC_ECHO2", &echo_server::on_echo2);
-        return ERR_SUCCESS;
+        return ERR_OK;
     }
 
     virtual void stop(bool cleanup = false)
@@ -86,16 +85,19 @@ class echo_client : public serverlet<echo_client>, public service_app
 {
 public:
     echo_client(service_app_spec* s)
-        : service_app(s), serverlet<echo_client>("echo_client")
+        : service_app(s), servicelet(8), serverlet<echo_client>("echo_client")
     {
         _message_size = system::config()->get_value<int>("apps.client", "message_size", 1024);
         _concurrency = system::config()->get_value<int>("apps.client", "concurrency", 1);
         _echo2 = system::config()->get_value<bool>("apps.client", "echo2", false);
+        _bench = system::config()->get_string_value("apps.client", "bench", "echo");
+        _test_local_queue = system::config()->get_value<bool>("apps.client", "queue-test-local", false);
         
         _seq = 0;
         _last_report_ts_ms = now_ms();
         _recv_bytes_since_last = 0;
         _live_echo_count = 0;
+        _timer = nullptr;
     }
 
     virtual error_code start(int argc, char** argv)
@@ -104,13 +106,50 @@ public:
             return ERR_INVALID_PARAMETERS;
 
         _server = end_point(argv[1], (uint16_t)atoi(argv[2]));
-        _timer = tasking::enqueue(LPC_ECHO_TIMER, this, &echo_client::on_echo_timer, 0, 1000);
-        return ERR_SUCCESS;
+
+        if (_bench == "echo")
+        {
+            _timer = tasking::enqueue(LPC_ECHO_TIMER, this, &echo_client::on_echo_timer, 0, 1000);
+        }
+        else if (_bench == "queue-test")
+        {
+            uint64_t last_report_ts = now_ms();
+            for (int i = 0; i < 16; i++)
+            {
+                tasking::enqueue(LPC_ECHO_TIMER, this, std::bind(&echo_client::queue_test, this, i, 0, last_report_ts), i, 1000);
+            }
+        }
+        
+        return ERR_OK;
     }
 
     virtual void stop(bool cleanup = false)
     {
-        _timer->cancel(true);
+        if (nullptr != _timer)
+        {
+            _timer->cancel(true);
+            _timer = nullptr;
+        }
+    }
+
+    void queue_test(int hash, int count, uint64_t ts_ms)
+    {
+        if (!_test_local_queue)
+        {
+            hash = (++hash) % 16;
+        }
+
+        ++count;
+        //std::cout << hash << " queue-test to " << count << std::endl;
+
+        if (count % 1000000 == 0)
+        {
+            auto nts = now_ms();
+            std::cout << (nts - ts_ms) << " ms elapsed, " <<  hash << " queue-test to " << count << std::endl;
+    //        ts_ms = nts;
+        }
+        
+        tasking::enqueue(LPC_ECHO_TIMER, this, std::bind(&echo_client::queue_test, this, hash, count, ts_ms), hash);
     }
 
     void send_one()
@@ -147,7 +186,7 @@ public:
 
     void on_echo_reply(error_code err, std::shared_ptr<std::string>& req, std::shared_ptr<std::string>& resp)
     {
-        if (err != ERR_SUCCESS)
+        if (err != ERR_OK)
         {
             bool s = false;
             std::cout << "echo err: " << err.to_string() << std::endl;
@@ -184,7 +223,7 @@ public:
 
     void on_echo_reply2(error_code err, std::shared_ptr<blob>& req, std::shared_ptr<blob>& resp)
     {
-        if (err != ERR_SUCCESS)
+        if (err != ERR_OK)
         {
             bool s = false;
             std::cout << "echo err: " << err.to_string() << std::endl;
@@ -225,6 +264,8 @@ private:
     uint64_t _last_report_ts_ms;
     int32_t  _live_echo_count;
 
+    std::string _bench;
+    bool _test_local_queue;
     end_point _server;
     int _seq;
     int _message_size;

@@ -30,6 +30,7 @@
 # include <dsn/internal/end_point.h>
 # include <dsn/internal/global_config.h>
 # include <dsn/internal/error_code.h>
+# include <sstream>
 
 namespace dsn { 
 
@@ -39,6 +40,7 @@ class disk_engine;
 class env_provider;
 class logging_provider;
 class nfs_node;
+class memory_provider;
 
 namespace service {
     class service_app;
@@ -53,11 +55,13 @@ public:
     rpc_engine*  rpc() const { return _rpc; }
     disk_engine* disk() const { return _disk; }
     nfs_node* nfs() const { return _nfs; }
+    void get_runtime_info(const std::string& indent, const std::vector<std::string>& args, __out_param std::stringstream& ss);
 
     error_code start();
 
     int id() const { return _app_id; }
     const char* name() const { return _app_name.c_str(); }
+    const service_app_spec& spec() const;
     
 private:
     int          _app_id;
@@ -79,6 +83,8 @@ public:
     const service_spec& spec() const { return _spec; }
     env_provider* env() const { return _env; }
     logging_provider* logging() const { return _logging; }
+    memory_provider* memory() const { return _memory; }
+    static std::string get_runtime_info(const std::vector<std::string>& args);
         
     void init_before_toollets(const service_spec& spec);
     void init_after_toollets();
@@ -86,11 +92,12 @@ public:
 
     service_node* start_node(service::service_app* app);
     void register_system_rpc_handler(task_code code, const char* name, rpc_server_handler* handler, int port = -1); // -1 for all nodes
-
+    
 private:
     service_spec                    _spec;
     env_provider*                   _env;
     logging_provider*               _logging;
+    memory_provider*                _memory;
 
     // <port, servicenode>
     typedef std::map<int, service_node*> node_engines_by_app_id;

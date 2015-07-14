@@ -44,20 +44,23 @@ public:
     task_queue(task_worker_pool* pool, int index, task_queue* inner_provider); 
     ~task_queue() {}
     
-    virtual void     enqueue(task_ptr& task) = 0;
-    virtual task_ptr dequeue() = 0;
+    // before enqueue, the caller calls task::add_ref to ensure a reference is kept
+    virtual void     enqueue(task* task) = 0;
+
+    // after dequeue, the caller calles task::release_ref to release the reference
+    virtual task* dequeue() = 0;
+
+
     virtual int      count() const = 0;
 
     const std::string & get_name() { return _name; }    
     task_worker_pool* pool() const { return _pool; }
-    perf_counter_ptr& get_qps_counter() { return _qps_counter; }
     admission_controller* controller() const { return _controller; }
     void set_controller(admission_controller* controller) { _controller = controller; }
 
 private:
     task_worker_pool*      _pool;
     std::string            _name;
-    perf_counter_ptr       _qps_counter;
     admission_controller*  _controller;
 };
 

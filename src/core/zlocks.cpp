@@ -28,6 +28,9 @@
 # include <dsn/internal/task.h>
 # include "service_engine.h"
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "lock"
 
 using namespace dsn::utils;
@@ -59,11 +62,11 @@ namespace dsn { namespace service {
             }
         }
 
-        void check_wait_task(task* waitee, bool waitee_is_running)
+        void check_wait_task(task* waitee)
         {
             check_wait_safety();
 
-            if (!waitee_is_running && nullptr != task::get_current_task() && !waitee->is_empty())
+            if (nullptr != task::get_current_task() && !waitee->is_empty())
             {
                 if (TASK_TYPE_RPC_RESPONSE == waitee->spec().type ||
                     task::get_current_task()->spec().pool_code == waitee->spec().pool_code)
@@ -98,22 +101,22 @@ zlock::~zlock(void)
 }
 
 
-zrwlock::zrwlock(void)
+zrwlock_nr::zrwlock_nr(void)
 {
-    rwlock_provider* last = factory_store<rwlock_provider>::create(service_engine::instance().spec().rwlock_factory_name.c_str(), PROVIDER_TYPE_MAIN, this, nullptr);
+    rwlock_nr_provider* last = factory_store<rwlock_nr_provider>::create(service_engine::instance().spec().rwlock_nr_factory_name.c_str(), PROVIDER_TYPE_MAIN, this, nullptr);
 
     // TODO: perf opt by saving the func ptrs somewhere
     for (auto it = service_engine::instance().spec().rwlock_aspects.begin();
         it != service_engine::instance().spec().rwlock_aspects.end();
         it++)
     {
-        last = factory_store<rwlock_provider>::create(it->c_str(), PROVIDER_TYPE_ASPECT, this, last);
+        last = factory_store<rwlock_nr_provider>::create(it->c_str(), PROVIDER_TYPE_ASPECT, this, last);
     }
 
     _provider = last;
 }
 
-zrwlock::~zrwlock(void)
+zrwlock_nr::~zrwlock_nr(void)
 {
     delete _provider;
 }

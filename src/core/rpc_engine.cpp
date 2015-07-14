@@ -37,6 +37,9 @@
 # include <dsn/internal/factory_store.h>
 # include <set>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "rpc.engine"
 
 namespace dsn {
@@ -46,46 +49,47 @@ namespace dsn {
     class rpc_timeout_task : public task
     {
     public:
-        rpc_timeout_task(std::shared_ptr<rpc_client_matcher> se, uint64_t id, task_spec* s) : task(LPC_RPC_TIMEOUT)
+        rpc_timeout_task(rpc_client_matcher* matcher, uint64_t id) 
+            : task(LPC_RPC_TIMEOUT)
         {
-            _s = se;
+            _matcher = matcher;
             _id = id;
-            _spec = s;
         }
 
         virtual void exec()
         {
-            _s->on_rpc_timeout(_id, _spec);
+            _matcher->on_rpc_timeout(_id);
         }
 
     private:
-        std::shared_ptr<rpc_client_matcher> _s;
-        uint64_t     _id;
-        task_spec  *_spec;
+        rpc_client_matcher_ptr _matcher;
+        uint64_t               _id;
     };
+
+    rpc_client_matcher::~rpc_client_matcher()
+    {
+        dassert(_requests.size() == 0, "all rpc enries must be removed before the matcher ends");
+    }
 
     bool rpc_client_matcher::on_recv_reply(uint64_t key, message_ptr& reply, int delay_ms)
     {
-        dassert(reply != nullptr, "cannot recieve an empty reply message");
+        dassert(reply != nullptr, "cannot receive an empty reply message");
 
-        error_code sys_err = reply->error();
         rpc_response_task_ptr call;
         task_ptr timeout_task;
-        bool ret;
 
         {
-            utils::auto_lock l(_requests_lock);
+            utils::auto_lock<::dsn::utils::ex_lock_nr_spin> l(_requests_lock);
             auto it = _requests.find(key);
             if (it != _requests.end())
             {
                 call = it->second.resp_task;
-                timeout_task = it->second.timeout_task;
+                timeout_task = std::move(it->second.timeout_task);
                 _requests.erase(it);
-                ret = true;
             }
             else
             {
-                ret = false;
+                return false;
             }
         }
 
@@ -97,24 +101,22 @@ namespace dsn {
             }
             
             call->set_delay(delay_ms);
-            call->enqueue(sys_err, reply);
+            call->enqueue(reply->error(), reply);
         }
 
-        return ret;
+        return true;
     }
 
-    void rpc_client_matcher::on_rpc_timeout(uint64_t key, task_spec* spec)
+    void rpc_client_matcher::on_rpc_timeout(uint64_t key)
     {
         rpc_response_task_ptr call;
-        network* net;
 
         {
-            utils::auto_lock l(_requests_lock);
+            utils::auto_lock<::dsn::utils::ex_lock_nr_spin> l(_requests_lock);
             auto it = _requests.find(key);
             if (it != _requests.end())
             {
-                call = it->second.resp_task;
-                net = it->second.net;
+                call = std::move(it->second.resp_task);
                 _requests.erase(it);
             }
             else
@@ -123,60 +125,28 @@ namespace dsn {
             }
         }
 
-        message_ptr& msg = call->get_request();
-        auto nts = ::dsn::service::env::now_us();
-        
-        // timeout already
-        // TODO: uint64 overflow
-        if (nts >= msg->header().client.timeout_ts_us)
-        {
-            message_ptr null_msg(nullptr);
-            call->enqueue(ERR_TIMEOUT, null_msg);
-        }
-        else
-        {
-            net->call(msg, call);
-        }
+        message_ptr null_msg(nullptr);
+        call->enqueue(ERR_TIMEOUT, null_msg);
     }
-
-
-    bool rpc_client_matcher::on_call(message_ptr& request, rpc_response_task_ptr& call, network* net)
+    
+    void rpc_client_matcher::on_call(message_ptr& request, rpc_response_task_ptr& call)
     {
         message* msg = request.get();
-        task_ptr timeout_task;
-        task_spec* spec = task_spec::get(msg->header().local_rpc_code);
+        task* timeout_task;
         message_header& hdr = msg->header();
 
-        timeout_task = (new rpc_timeout_task(shared_from_this(), hdr.id, spec));
+        timeout_task = (new rpc_timeout_task(this, hdr.id));
 
         {
-            utils::auto_lock l(_requests_lock);
+            utils::auto_lock<::dsn::utils::ex_lock_nr_spin> l(_requests_lock);
             auto pr = _requests.insert(rpc_requests::value_type(hdr.id, match_entry()));
             dassert (pr.second, "the message is already on the fly!!!");
             pr.first->second.resp_task = call;
             pr.first->second.timeout_task = timeout_task;
-            pr.first->second.net = net;
-            //{call, timeout_task, net }
         }
 
-        auto nts = ::dsn::service::env::now_us();
-        auto tts = msg->header().client.timeout_ts_us;
-
-        if (tts > nts)
-        {
-            int timeout_ms = static_cast<int>(tts > nts ? (tts - nts) : 0) / 1000;
-            if (timeout_ms >= spec->rpc_retry_interval_milliseconds * 2)
-                timeout_ms = spec->rpc_retry_interval_milliseconds;
-
-            timeout_task->set_delay(timeout_ms);
-            timeout_task->enqueue();
-            return true;
-        }
-        else
-        {
-            timeout_task->enqueue();
-            return false;
-        }
+        timeout_task->set_delay(msg->header().client.timeout_ms);
+        timeout_task->enqueue();
     }
 
     //------------------------
@@ -196,7 +166,7 @@ namespace dsn {
     //
     // management routines
     //
-    network* rpc_engine::create_network(const network_config_spec& netcs, bool client_only)
+    network* rpc_engine::create_network(const network_server_config& netcs, bool client_only)
     {
         const service_spec& spec = service_engine::instance().spec();
         auto net = utils::factory_store<network>::create(
@@ -212,7 +182,7 @@ namespace dsn {
 
         // start the net
         error_code ret = net->start(netcs.channel, netcs.port, client_only);
-        if (ret == ERR_SUCCESS)
+        if (ret == ERR_OK)
         {
             return net;
         }
@@ -221,57 +191,6 @@ namespace dsn {
             // mem leak, don't care as it halts the program
             return nullptr;
         }   
-    }
-
-    bool rpc_engine::start_server_port(int port)
-    {
-        // exsiting servers
-        if (_server_nets.find(port) != _server_nets.end())
-            return false;
-
-        std::vector<network*>* pnets;
-        std::vector<network*> nets;
-        auto pr = _server_nets.insert(std::map<int, std::vector<network*>>::value_type(port, nets));
-        pnets = &pr.first->second;
-
-        pnets->resize(rpc_channel::max_value() + 1);
-        const service_spec& spec = service_engine::instance().spec();
-        for (int i = 0; i <= rpc_channel::max_value(); i++)
-        {
-            network_config_spec cs(port, rpc_channel(rpc_channel::to_string(i)));
-            network* net = nullptr;
-
-            auto it = spec.network_configs.find(cs);
-            if (it != spec.network_configs.end())
-            {
-                net = create_network(it->second, false);
-            }
-
-            else
-            {
-                auto it = spec.network_default_client_cfs.find(cs.channel);
-                if (it != spec.network_default_client_cfs.end())
-                {
-                    cs.factory_name = it->second.factory_name;
-                    cs.message_buffer_block_size = it->second.message_buffer_block_size;
-                    
-                    net = create_network(cs, false);
-                }
-            }
-
-            (*pnets)[i] = net;
-
-            // report
-            if (net)
-            {
-                dinfo("network started at port %u, channel = %s, fmt = %s ...",                    
-                    (uint32_t)port,
-                    rpc_channel::to_string(i),
-                    cs.hdr_format.to_string()
-                    );
-            }
-        }
-        return true;
     }
 
     error_code rpc_engine::start(const service_app_spec& aspec)
@@ -285,7 +204,6 @@ namespace dsn {
         std::map<std::string, network*> named_nets; // factory##fmt##port -> net
 
         // start client networks
-        bool r;
         _client_nets.resize(network_header_format::max_value() + 1);
 
         const service_spec& spec = service_engine::instance().spec();
@@ -303,28 +221,19 @@ namespace dsn {
                 std::string factory;
                 int blk_size;
 
-                auto it1 = aspec.net_client_cfs.find(c);
-                if (it1 != aspec.net_client_cfs.end())
+                auto it1 = aspec.network_client_confs.find(c);
+                if (it1 != aspec.network_client_confs.end())
                 {
                     factory = it1->second.factory_name;
                     blk_size = it1->second.message_buffer_block_size;
                 }
                 else
                 {
-                    auto it = spec.network_default_client_cfs.find(c);
-                    if (it != spec.network_default_client_cfs.end())
-                    {
-                        factory = it->second.factory_name;
-                        blk_size = it->second.message_buffer_block_size;
-                    }
-                    else
-                    {
-                        dwarn("network client for channel %s not registered, assuming not used further", c.to_string());
-                        continue;
-                    }
+                    dwarn("network client for channel %s not registered, assuming not used further", c.to_string());
+                    continue;
                 }
 
-                network_config_spec cs(aspec.id, c);
+                network_server_config cs(aspec.id, c);
 
                 cs.factory_name = factory;
                 cs.message_buffer_block_size = blk_size;
@@ -337,17 +246,45 @@ namespace dsn {
         }
         
         // start server networks
-        for (auto& p : aspec.ports)
+        for (auto& sp : aspec.network_server_confs)
         {
-            r = start_server_port(p);
-            if (!r) return ERR_NETWORK_INIT_FALED;
+            int port = sp.second.port;
+
+            std::vector<network*>* pnets;
+            auto it = _server_nets.find(port);
+
+            if (it == _server_nets.end())
+            {
+                std::vector<network*> nets;
+                auto pr = _server_nets.insert(std::map<int, std::vector<network*>>::value_type(port, nets));
+                pnets = &pr.first->second;
+                pnets->resize(rpc_channel::max_value() + 1);
+            }
+            else
+            {
+                pnets = &it->second;
+            }
+
+            auto net = create_network(sp.second, false);
+            if (net == nullptr)
+            {
+                return ERR_NETWORK_INIT_FALED;
+            }
+
+            (*pnets)[sp.second.channel] = net;
+
+            dinfo("network started at port %u, channel = %s, fmt = %s ...",
+                (uint32_t)port,
+                sp.second.channel.to_string(),
+                sp.second.hdr_format.to_string()
+                );
         }
 
         _local_primary_address = _client_nets[0][0]->address();
         _local_primary_address.port = aspec.ports.size() > 0 ? *aspec.ports.begin() : aspec.id;
 
         _is_running = true;
-        return ERR_SUCCESS;
+        return ERR_OK;
     }
     
     bool rpc_engine::register_rpc_handler(rpc_handler_ptr& handler)
@@ -396,7 +333,7 @@ namespace dsn {
         if (handler != nullptr)
         {
             msg->header().local_rpc_code = (uint16_t)handler->code;
-            auto tsk = handler->handler->new_request_task(msg, node());
+            rpc_request_task_ptr tsk = handler->handler->new_request_task(msg, node());
             tsk->set_delay(delay_ms);
             tsk->enqueue(_node);
         }
@@ -432,24 +369,14 @@ namespace dsn {
         msg->header().client.port = primary_address().port;
         msg->header().from_address = primary_address();
         msg->header().new_rpc_id();
-
-        // it happens when retry the same request at the app level and timeout is not specified
-        if (msg->header().client.timeout_ts_us <= nts_us)
-        {
-            msg->header().client.timeout_ts_us = nts_us
-                + static_cast<uint64_t>(sp->rpc_timeout_milliseconds) * 1000ULL;
-        }
-        
         msg->seal(_message_crc_required);
 
         if (!sp->on_rpc_call.execute(task::get_current_task(), msg, call.get(), true))
         {
             if (call != nullptr)
             {
-                int delay_ms = static_cast<int>((msg->header().client.timeout_ts_us - nts_us) / 1000);
-
                 message_ptr nil;
-                call->set_delay(delay_ms);
+                call->set_delay(msg->header().client.timeout_ms);
                 call->enqueue(ERR_TIMEOUT, nil);
             }   
             return;

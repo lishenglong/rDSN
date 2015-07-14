@@ -40,6 +40,7 @@ namespace dsn {
         void counter_service_impl::on_add(const ::dsn::example::count_op& op, ::dsn::service::rpc_replier<int32_t>& reply)
         {
             zauto_lock l(_lock);
+            ++_last_committed_decree;
             auto rt = _counters[op.name] += op.operand;
             reply(rt);
         }
@@ -154,7 +155,7 @@ namespace dsn {
 
             if (last_committed_decree() == last_durable_decree())
             {
-                return ERR_SUCCESS;
+                return ERR_OK;
             }
 
             // TODO: should use async write instead
@@ -177,7 +178,7 @@ namespace dsn {
             }
 
             _last_durable_decree = last_committed_decree();
-            return ERR_SUCCESS;
+            return ERR_OK;
         }
 
         // helper routines to accelerate learning
@@ -208,7 +209,7 @@ namespace dsn {
 
             state.meta.push_back(blob(buf, static_cast<int>(bb.data() - bb.buffer().get()), bb.length()));
 
-            return ERR_SUCCESS;
+            return ERR_OK;
         }
 
         int counter_service_impl::apply_learn_state(learn_state& state)

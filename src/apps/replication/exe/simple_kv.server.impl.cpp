@@ -28,7 +28,10 @@
 #include <sstream>
 #include <boost/filesystem.hpp>
 
-#define __TITLE__ "simple.kv"
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "simple.kv"
 
 namespace dsn {
     namespace replication {
@@ -37,7 +40,7 @@ namespace dsn {
             simple_kv_service_impl::simple_kv_service_impl(replica* replica, configuration_ptr& cf)
                 : simple_kv_service(replica, cf)
             {
-                _test_file_learning = true;
+                _test_file_learning = false;
             }
 
             // RPC_SIMPLE_KV_READ
@@ -62,8 +65,10 @@ namespace dsn {
             {
                 zauto_lock l(_lock);
                 _store[pr.key] = pr.value;
+                ++_last_committed_decree;
+
                 dinfo("write %s, decree = %lld\n", pr.value.c_str(), last_committed_decree());
-                reply(ERR_SUCCESS);
+                reply(ERR_OK);
             }
 
             // RPC_SIMPLE_KV_APPEND
@@ -75,9 +80,10 @@ namespace dsn {
                     it->second.append(pr.value);
                 else
                     _store[pr.key] = pr.value;
+                ++_last_committed_decree;
 
                 dinfo("append %s, decree = %lld\n", pr.value.c_str(), last_committed_decree());
-                reply(ERR_SUCCESS);
+                reply(ERR_OK);
             }
             
             int simple_kv_service_impl::open(bool create_new)
@@ -148,10 +154,10 @@ namespace dsn {
 
                 _store.clear();
 
-                uint32_t count;
+                uint64_t count;
                 is.read((char*)&count, sizeof(count));
 
-                for (uint32_t i = 0; i < count; i++)
+                for (uint64_t i = 0; i < count; i++)
                 {
                     std::string key;
                     std::string value;
@@ -179,7 +185,7 @@ namespace dsn {
 
                 if (last_committed_decree() == last_durable_decree())
                 {
-                    return ERR_SUCCESS;
+                    return ERR_OK;
                 }
 
                 // TODO: should use async write instead
@@ -188,7 +194,7 @@ namespace dsn {
                         static_cast<long long int>(last_committed_decree()));
                 std::ofstream os(name);
 
-                uint32_t count = (uint32_t)_store.size();
+                uint64_t count = (uint64_t)_store.size();
                 os.write((const char*)&count, (uint32_t)sizeof(count));
 
                 for (auto it = _store.begin(); it != _store.end(); it++)
@@ -207,7 +213,7 @@ namespace dsn {
                 }
 
                 _last_durable_decree = last_committed_decree();
-                return ERR_SUCCESS;
+                return ERR_OK;
             }
 
             // helper routines to accelerate learning
@@ -224,7 +230,7 @@ namespace dsn {
 
                 dassert(_last_committed_decree >= 0, "");
 
-                int count = static_cast<int>(_store.size());
+                uint64_t count = static_cast<uint64_t>(_store.size());
                 writer.write(count);
 
                 for (auto it = _store.begin(); it != _store.end(); it++)
@@ -252,7 +258,7 @@ namespace dsn {
                     fout.close();        
                 }
 
-                return ERR_SUCCESS;
+                return ERR_OK;
             }
 
             int simple_kv_service_impl::apply_learn_state(learn_state& state)
@@ -275,10 +281,10 @@ namespace dsn {
 
                 dassert(decree >= 0, "");
 
-                int count;
+                uint64_t count;
                 reader.read(count);
 
-                for (int i = 0; i < count; i++)
+                for (uint64_t i = 0; i < count; i++)
                 {
                     std::string key, value;
                     reader.read(key);
@@ -313,7 +319,7 @@ namespace dsn {
                     }
                 }
 
-                if (ret) return ERR_SUCCESS;
+                if (ret) return ERR_OK;
                 else return ERR_LEARN_FILE_FALED;
             }
 

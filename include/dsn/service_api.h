@@ -28,6 +28,7 @@
 # include <dsn/internal/task.h>
 # include <dsn/internal/service_app.h>
 # include <dsn/internal/zlocks.h>
+# include <dsn/internal/callocator.h>
 
 namespace dsn { namespace service {
 
@@ -47,7 +48,7 @@ namespace tasking
 
     //
     // cancel a task
-    // return - whether the task has completed (not necessarily cancelled though)
+    // return - whether this cancel succeed
     //
     inline bool cancel(task_ptr& task, bool wait_until_finished)
     {
@@ -92,11 +93,10 @@ namespace rpc
 
     //
     // call a RPC
-    //  -when callback is empty, we assume callers will invoke return::wait() 
-    //  to perform a synchronous rpc call
-    //  -to invoke a one way rpc call, use call_one_way below
+    //   developers can always call callback::wait for synchronous calls
     //
-    extern rpc_response_task_ptr call(const end_point& server, message_ptr& request, rpc_response_task_ptr callback = nullptr);
+    extern void                  call(const end_point& server, message_ptr& request, rpc_response_task_ptr& callback);
+    extern rpc_response_task_ptr call(const end_point& server, message_ptr& request); // return callback
 
     //
     // one way RPC call, no need to expect a return response value
@@ -165,6 +165,23 @@ namespace env
     inline double   probability() { return static_cast<double>(random32(0, 1000000000)) / 1000000000.0; }
 }
 
+//
+// in case the apps need to use a dedicated memory allocator
+// e.g., when required by a replay tool to ensure deterministic memory
+// allocation/deallocation results
+//
+namespace memory
+{
+    extern void* allocate(size_t sz);
+    extern void* reallocate(void* ptr, size_t sz);
+    extern void  deallocate(void* ptr);
+
+    template <typename T>
+    using sallocator = ::dsn::callocator<T, allocate, deallocate>;
+
+    using sallocator_object = callocator_object<allocate, deallocate>;
+}
+
 namespace system
 {
     //
@@ -216,6 +233,9 @@ namespace system
     // usually used by a tool
     //
     extern const std::map<std::string, service_app*>& get_all_apps();
+
+    // get service spec
+    extern const service_spec& spec();
 }
 
 }} // end namespace dsn::service

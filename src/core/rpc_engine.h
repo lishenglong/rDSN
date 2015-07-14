@@ -42,7 +42,6 @@ public:
     // management routines
     //
     error_code start(const service_app_spec& spec);
-    bool       start_server_port(int port);
 
     //
     // rpc registrations
@@ -54,6 +53,7 @@ public:
     // rpc routines
     //
     void call(message_ptr& request, rpc_response_task_ptr& call);
+    void on_recv_request(message_ptr& msg, int delay_ms);
     static void reply(message_ptr& response);
     
     //
@@ -61,22 +61,20 @@ public:
     //
     service_node* node() const { return _node; }
     const end_point& primary_address() const { return _local_primary_address; }
-    void on_recv_request(message_ptr& msg, int delay_ms);
 
 private:
-    network* create_network(const network_config_spec& netcs, bool client_only);
+    network* create_network(const network_server_config& netcs, bool client_only);
 
 private:
     configuration_ptr                     _config;    
     service_node                          *_node;
     std::vector<std::vector<network*>>    _client_nets; // <format, <CHANNEL, network*>>
-    std::map<int, std::vector<network*>>  _server_nets; // <port, <CHANNEL, network*>>
-    std::shared_ptr<rpc_client_matcher>   _matcher;
+    std::unordered_map<int, std::vector<network*>>  _server_nets; // <port, <CHANNEL, network*>>
     end_point                             _local_primary_address;
 
-    typedef std::map<std::string, rpc_handler_ptr> rpc_handlers;
+    typedef std::unordered_map<std::string, rpc_handler_ptr> rpc_handlers;
     rpc_handlers                  _handlers;
-    utils::rw_lock                _handlers_lock;
+    utils::rw_lock_nr             _handlers_lock;
     
     bool                          _is_running;
 

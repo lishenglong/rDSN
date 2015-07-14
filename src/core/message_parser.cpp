@@ -26,6 +26,9 @@
 # include <dsn/internal/message_parser.h>
 # include <dsn/internal/logging.h>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "message.parser"
 
 namespace dsn {
@@ -92,9 +95,9 @@ namespace dsn {
     {
         mark_read(read_length);
 
-        if (_read_buffer_occupied >= message_header::serialized_size())
+        if (_read_buffer_occupied >= MSG_HDR_SERIALIZED_SIZE)
         {            
-            int msg_sz = message_header::serialized_size() +
+            int msg_sz = MSG_HDR_SERIALIZED_SIZE +
                 message_header::get_body_length((char*)_read_buffer.data());
 
             // msg done
@@ -107,7 +110,7 @@ namespace dsn {
 
                 _read_buffer = _read_buffer.range(msg_sz);
                 _read_buffer_occupied -= msg_sz;
-                read_next = message_header::serialized_size();
+                read_next = MSG_HDR_SERIALIZED_SIZE;
                 return msg;
             }
             else
@@ -119,7 +122,7 @@ namespace dsn {
 
         else
         {
-            read_next = message_header::serialized_size() - _read_buffer_occupied;
+            read_next = MSG_HDR_SERIALIZED_SIZE - _read_buffer_occupied;
             return nullptr;
         }
     }

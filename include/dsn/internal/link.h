@@ -25,23 +25,28 @@
  */
 # pragma once
 
-// class T : public slink<T>
-template<typename T>
+# include <dsn/internal/logging.h>
+
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
+# define __TITLE__ "linklist"
+
 class slink
 {
 public:
     slink() : _next(nullptr){}
 
-    T* next() const { return _next; }
+    slink* next() const { return _next; }
     
-    void insert_after(T* o) 
+    void insert_after(slink* o) 
     {
-        T* n = _next; 
+        slink* n = _next; 
         _next = o; 
         o->_next = n; 
     }
 
-    T* remove_next() 
+    slink* remove_next() 
     {
         if (_next) 
         {
@@ -54,53 +59,57 @@ public:
     }
 
 private:
-    T *_next;
+    slink *_next;
 };
 
-
-// class T : public dlink<T>
-template<typename T>
 class dlink
 {
 public:
-    dlink() { _next = _prev = dynamic_cast<T*>(this); }
-    T* next() const { return _next; }
-    T* prev() const { return _prev; }
-    bool is_alone() const { return _next == _prev; }
+    dlink() { _next = _prev = (this); }
+    dlink* next() const { return _next; }
+    dlink* prev() const { return _prev; }
+    bool is_alone() const { return _next == this; }
 
-    void insert_after(T* o)
+    // insert me before existing link node o [p (this) o]
+    void insert_before(dlink* o)
     {
-        auto n = _next;
+        dbg_dassert(is_alone(), "must not be linked to other list before insert");
+
+        auto p = o->_prev;
         
         this->_next = o;
-        o->_prev = dynamic_cast<T*>(this);
+        o->_prev = (this);
 
-        o->_next = n;
-        n->_prev = o;        
+        p->_next = this;
+        this->_prev = p;
     }
 
-    void insert_before(T* o)
+    // insert me after existing link node o [o (this) n]
+    void insert_after(dlink* o)
     {
-        auto n = _prev;
+        dbg_dassert(is_alone(), "must not be linked to other list before insert");
+
+        auto n = o->_next;
 
         this->_prev = o;
-        o->_next = dynamic_cast<T*>(this);
+        o->_next = this;
 
-        o->_prev = n;
-        n->_next = o;
+        this->_next = n;
+        n->_prev = this;
     }
 
-    T* remove()
+    dlink* remove()
     {
         if (!is_alone())
         {
             this->_next->_prev = this->_prev;
             this->_prev->_next = this->_next;
+            _next = _prev = this;
         }
-        return dynamic_cast<T*>(this);
+        return (this);
     }
 
 private:
-    T* _next;
-    T* _prev;
+    dlink* _next;
+    dlink* _prev;
 };

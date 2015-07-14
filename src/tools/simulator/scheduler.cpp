@@ -29,33 +29,36 @@
 # include <dsn/service_api.h>
 # include <set>
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "simulator"
 
 namespace dsn { namespace tools {
 
-void event_wheel::add_event(uint64_t ts, task_ptr& task)
+void event_wheel::add_event(uint64_t ts, task* t)
 {
-    utils::auto_lock l(_lock);
+    utils::auto_lock<::dsn::utils::ex_lock> l(_lock);
 
-    std::vector<task_ptr>* evts;
+    std::vector<task*>* evts;
     auto itr = _events.find(ts);
     if (itr != _events.end())
         evts = itr->second;
     else
     {
-        evts = new std::vector<task_ptr>();
+        evts = new std::vector<task*>();
         _events.insert(std::make_pair(ts, evts));
     }
     
-    evts->push_back(task);
+    evts->push_back(t);
 
 }
 
-std::vector<task_ptr>* event_wheel::pop_next_events(__out_param uint64_t& ts)
+std::vector<task*>* event_wheel::pop_next_events(__out_param uint64_t& ts)
 {
-    utils::auto_lock l(_lock);
+    utils::auto_lock<::dsn::utils::ex_lock> l(_lock);
 
-    std::vector<task_ptr>* evts = NULL;
+    std::vector<task*>* evts = NULL;
     auto itr = _events.begin();
     if (itr != _events.end()){
         evts = itr->second;
@@ -67,7 +70,7 @@ std::vector<task_ptr>* event_wheel::pop_next_events(__out_param uint64_t& ts)
 
 void event_wheel::clear()
 {
-    utils::auto_lock l(_lock);
+    utils::auto_lock<::dsn::utils::ex_lock> l(_lock);
     _events.clear();
 }
 
@@ -143,9 +146,9 @@ scheduler::~scheduler(void)
     }
 }
 
-void scheduler::add_task(task_ptr& tsk, task_queue* q)
+void scheduler::add_task(task* tsk, task_queue* q)
 {
-    auto ts = task_ext::get_inited(tsk.get());
+    auto ts = task_ext::get_inited(tsk);
     ts->queue = q;
 
     auto delay = (uint64_t)tsk->delay_milliseconds() * 1000000;
@@ -187,7 +190,7 @@ void scheduler::wait_schedule(bool in_continue, bool is_continue_ready /*= false
     {
         schedule();
     }
-    s->runnable.wait(TIME_MS_MAX);
+    s->runnable.wait();
 }
 
 void scheduler::schedule()
@@ -221,7 +224,7 @@ void scheduler::schedule()
         if (events)
         {
             {
-                utils::auto_lock l(_lock);
+                utils::auto_lock<::dsn::utils::ex_lock> l(_lock);
                 _time_ns = ts;
             }
 
@@ -230,7 +233,9 @@ void scheduler::schedule()
 
             for (auto it = events->begin(); it != events->end(); it++)
             {
-                ::dsn::service::tasking::enqueue(*it);
+                task_ptr t = *it;
+                ::dsn::service::tasking::enqueue(t);
+                t->release_ref();
             }
 
             delete events;

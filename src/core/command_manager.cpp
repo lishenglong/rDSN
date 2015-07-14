@@ -26,12 +26,16 @@
 # include "command_manager.h"
 # include <iostream>
 # include <thread>
+# include <sstream>
 # include <dsn/internal/utils.h>
 # include <dsn/internal/logging.h>
 # include <dsn/service_api.h>
 # include <dsn/internal/serialization.h>
 # include "service_engine.h"
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "command_manager"
 
 namespace dsn {
@@ -169,9 +173,9 @@ namespace dsn {
     class cli_rpc_server_handler : public rpc_server_handler
     {
     public:
-        virtual rpc_request_task_ptr new_request_task(message_ptr& request, service_node* node)
+        virtual rpc_request_task* new_request_task(message_ptr& request, service_node* node)
         {
-            return rpc_request_task_ptr(new cli_rpc_request_task(request, node));
+            return (new cli_rpc_request_task(request, node));
         }
     };
 

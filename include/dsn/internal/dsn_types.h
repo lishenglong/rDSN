@@ -42,6 +42,8 @@ typedef HANDLE handle_t;
 
 # elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
 
+# include <unistd.h>
+
 # define __selectany __attribute__((weak)) extern 
 typedef int handle_t;
 
@@ -64,11 +66,16 @@ typedef int handle_t;
 
 # ifndef CONTAINING_RECORD 
 # define CONTAINING_RECORD(address, type, field) \
-            ((type *)((char*)(address)-FIELD_OFFSET(type, field)))
+    ((type *)((char*)(address)-FIELD_OFFSET(type, field)))
 # endif
 
 # ifndef MAX_COMPUTERNAME_LENGTH
 # define MAX_COMPUTERNAME_LENGTH 32
+# endif
+
+# ifndef ARRAYSIZE
+# define ARRAYSIZE(a) \
+    ((sizeof(a) / sizeof(*(a))) / static_cast<size_t>(!(sizeof(a) % sizeof(*(a)))))
 # endif
 
 # ifndef __in_param
@@ -87,6 +94,9 @@ typedef int handle_t;
 # include <string>
 # include <memory>
 # include <map>
+# include <unordered_map>
+# include <set>
+# include <unordered_set>
 # include <vector>
 # include <list>
 # include <algorithm>
@@ -139,11 +149,13 @@ namespace dsn
     class message;
     class rpc_client_session;
     class rpc_server_session;
+    class rpc_client_matcher;
 
     typedef ::boost::intrusive_ptr<task> task_ptr;
     typedef ::boost::intrusive_ptr<message> message_ptr;
     typedef ::boost::intrusive_ptr<rpc_client_session> rpc_client_session_ptr;
     typedef ::boost::intrusive_ptr<rpc_server_session> rpc_server_session_ptr;
+    typedef ::boost::intrusive_ptr<rpc_client_matcher> rpc_client_matcher_ptr;
 
     #define TOOL_TYPE_MAIN 0
     #define TOOL_TYPE_ASPECT 1

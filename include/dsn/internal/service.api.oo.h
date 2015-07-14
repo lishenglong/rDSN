@@ -41,6 +41,18 @@ namespace dsn {
                 int timer_interval_milliseconds = 0
                 );
 
+            // sometimes we need to have task given BFORE the task has been enqueued 
+            // to ensure a happens-before relationship to avoid race
+            void enqueue(
+                __out_param task_ptr& task,
+                task_code evt,
+                servicelet *context,
+                task_handler callback,
+                int hash = 0,
+                int delay_milliseconds = 0,
+                int timer_interval_milliseconds = 0
+                );
+
             template<typename T> // where T : public virtual servicelet
             inline task_ptr enqueue(
                 task_code evt,
@@ -156,7 +168,7 @@ namespace dsn {
             // callback type 5:
             //  std::function<bool(error_code, std::shared_ptr<TRequest>&, std::shared_ptr<TResponse>&)>
             // return true when the system need to continue the next callback
-            class layered_rpc : public rpc_response_task, public service_context_manager
+            class layered_rpc : public rpc_response_task, public task_context_manager
             {
             public:
                 layered_rpc(servicelet* owner, message_ptr& request, int hash = 0);

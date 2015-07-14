@@ -33,6 +33,9 @@
 # include "server_state.h"
 # include "replication_failure_detector.h"
 
+# ifdef __TITLE__
+# undef __TITLE__
+# endif
 # define __TITLE__ "replication.global.check"
 
 namespace dsn {
@@ -102,8 +105,8 @@ namespace dsn {
                 auto meta = meta_leader();
                 if (!meta) return;
 
-                std::map<global_partition_id, end_point> primaries_from_meta_server;
-                std::map<global_partition_id, end_point> primaries_from_replica_servers;
+                std::unordered_map<global_partition_id, end_point> primaries_from_meta_server;
+                std::unordered_map<global_partition_id, end_point> primaries_from_replica_servers;
 
                 for (auto& app : meta->_reliable_state->_apps)
                 {
@@ -124,7 +127,7 @@ namespace dsn {
                         if (r.second->status() == PS_PRIMARY)
                         {
                             auto pr = primaries_from_replica_servers.insert(
-                                std::map<global_partition_id, end_point>::value_type(r.first, rs->primary_address())
+                                std::unordered_map<global_partition_id, end_point>::value_type(r.first, rs->primary_address())
                                 );
                             dassert(pr.second, "only one primary can exist for one partition");
 
@@ -143,7 +146,7 @@ namespace dsn {
                 auto meta = meta_leader();
                 if (!meta) return;
 
-                std::map<global_partition_id, replica_ptr> last_committed_decrees_on_primary;
+                std::unordered_map<global_partition_id, replica_ptr> last_committed_decrees_on_primary;
 
                 for (auto& rs : _replica_servers)
                 {

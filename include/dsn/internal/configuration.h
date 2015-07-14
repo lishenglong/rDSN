@@ -256,15 +256,12 @@ template<> inline bool configuration::get_value<bool>(const char* section, const
     val.fld = config->get_value<type>(section, #fld, default_value ? default_value->fld : default_fld_value);
 
 // customized_id<type> fld = xyz
-# define CONFIG_FLD_ID(type, fld) \
+# define CONFIG_FLD_ID(type, fld, default_fld_value) \
 {\
     auto v = config->get_value<std::string>(section, #fld, ""); \
     if (v == "") {    \
         if (default_value) val.fld = default_value->fld; \
-        else {\
-            printf("enum configuration '[%s] %s' not defined", section, #fld); \
-            return false; \
-        }\
+        else val.fld = default_fld_value; \
     }\
     else {\
         if (!type::is_exist(v.c_str())) {\
@@ -306,7 +303,7 @@ template<> inline bool configuration::get_value<bool>(const char* section, const
             return false; \
         } \
         else \
-            val.fld.push_back(type::from_string(v.c_str(), static_cast<type>(0))); \
+            val.fld.push_back(type(v.c_str())); \
     } \
     if (val.fld.size() == 0 && default_value) \
         val.fld = default_value->fld; \
@@ -316,6 +313,17 @@ template<> inline bool configuration::get_value<bool>(const char* section, const
 # define CONFIG_FLD_STRING_LIST(fld) \
     val.fld = config->get_string_value_list(section, #fld, ','); \
     if (val.fld.size() == 0 && default_value) \
-        val.fld = default_value->fld;
+    val.fld = default_value->fld;
+
+// cb: std::list<std::string>& => fld value
+# define CONFIG_FLD_INT_LIST(fld) \
+   { \
+    auto lv = config->get_string_value_list(section, #fld, ','); \
+    if (lv.size() == 0 && default_value) \
+        val.fld = default_value->fld; \
+    else {\
+        for (auto& s : lv) { val.fld.push_back(atoi(s.c_str())); } \
+    }\
+   }
 
 } // end namespace
